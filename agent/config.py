@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     chat_tool_calling_enabled: bool = True
     chat_max_tool_iterations: int = 5
     tool_timeout_seconds: int = 5
+    chat_history_turns: int = 10  # recent user+agent messages to include for context
 
     # -- Docker host override ------------------------------------------------
     docker_host: str = ""

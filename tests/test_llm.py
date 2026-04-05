@@ -253,6 +253,36 @@ class TestChat:
         )
         assert "trouble" in result.lower()
 
+    @pytest.mark.asyncio
+    async def test_chat_passes_history_to_prompt(self, llm_client):
+        """Verify chat() includes history messages in the Ollama call."""
+        captured = {}
+
+        def capture_chat(**kwargs):
+            captured["messages"] = kwargs["messages"]
+            return {"message": {"content": "I will investigate redis."}}
+
+        llm_client._client.chat = MagicMock(side_effect=capture_chat)
+        history = [
+            {"role": "user", "content": "What is wrong with redis?"},
+            {"role": "assistant", "content": "Redis CPU is at 95%. Shall I investigate?"},
+        ]
+        result = await llm_client.chat(
+            question="yes",
+            system_state={},
+            history=history,
+        )
+        assert result == "I will investigate redis."
+        msgs = captured["messages"]
+        # system + 2 history + current user = 4
+        assert len(msgs) == 4
+        assert msgs[1]["role"] == "user"
+        assert msgs[1]["content"] == "What is wrong with redis?"
+        assert msgs[2]["role"] == "assistant"
+        assert "95%" in msgs[2]["content"]
+        assert msgs[3]["role"] == "user"
+        assert "yes" in msgs[3]["content"]
+
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -397,8 +427,8 @@ class TestPrompts:
             question="What services are down?",
             system_state={"demo": {"state": "running", "cpu_percent": 30, "memory_percent": 50}},
         )
-        assert len(msgs) == 2
-        assert "What services are down?" in msgs[1]["content"]
+        assert len(msgs) == 2  # system + user (no history)
+        assert "What services are down?" in msgs[-1]["content"]
 
     def test_chat_prompt_with_incident(self):
         msgs = chat_prompt(
@@ -415,9 +445,9 @@ class TestPrompts:
             question="What is the status of redis?",
             system_state={"redis": {"state": "running", "cpu_percent": 10, "memory_percent": 30}},
         )
-        assert len(msgs) == 2
+        assert len(msgs) == 2  # system + user (no history)
         assert "Tool Usage Rules" in msgs[0]["content"]
-        assert "redis" in msgs[1]["content"]
+        assert "redis" in msgs[-1]["content"]
 
     def test_chat_prompt_with_tools_has_incident(self):
         msgs = chat_prompt_with_tools(
@@ -425,4 +455,53 @@ class TestPrompts:
             system_state={},
             incident_context={"incident_id": "inc_1", "title": "test"},
         )
-        assert "inc_1" in msgs[1]["content"]
+        assert "inc_1" in msgs[-1]["content"]
+
+    # -- Conversation history context ----------------------------------------
+
+    def test_chat_prompt_with_history(self):
+        history = [
+            {"role": "user", "content": "What is wrong with redis?"},
+            {"role": "assistant", "content": "Redis CPU is at 95%. Shall I investigate?"},
+        ]
+        msgs = chat_prompt(
+            question="yes",
+            system_state={"redis": {"state": "running", "cpu_percent": 95, "memory_percent": 30}},
+            history=history,
+        )
+        # system + 2 history + current user = 4
+        assert len(msgs) == 4
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "user"
+        assert msgs[1]["content"] == "What is wrong with redis?"
+        assert msgs[2]["role"] == "assistant"
+        assert "95%" in msgs[2]["content"]
+        assert msgs[3]["role"] == "user"
+        assert "yes" in msgs[3]["content"]
+
+    def test_chat_prompt_with_tools_with_history(self):
+        history = [
+            {"role": "user", "content": "Check demo-api health"},
+            {"role": "assistant", "content": "demo-api is healthy."},
+        ]
+        msgs = chat_prompt_with_tools(
+            question="and demo-redis?",
+            system_state={},
+            history=history,
+        )
+        assert len(msgs) == 4
+        assert msgs[0]["role"] == "system"
+        assert "Tool Usage Rules" in msgs[0]["content"]
+        assert msgs[1]["content"] == "Check demo-api health"
+        assert msgs[3]["role"] == "user"
+        assert "demo-redis" in msgs[3]["content"]
+
+    def test_chat_prompt_no_history_is_default(self):
+        """Without history param, prompt is system+user only."""
+        msgs = chat_prompt("hello", {})
+        assert len(msgs) == 2
+
+    def test_chat_prompt_empty_history(self):
+        """Empty list is same as no history."""
+        msgs = chat_prompt("hello", {}, history=[])
+        assert len(msgs) == 2

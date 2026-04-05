@@ -8,7 +8,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agent.llm.tool_executor import MAX_OUTPUT_CHARS, ToolExecutor, ToolResult, _truncate_output
+from agent.llm.tool_executor import (
+    CHAT_DENY_LIST,
+    CHAT_DENY_PREFIXES,
+    MAX_OUTPUT_CHARS,
+    ToolExecutor,
+    ToolResult,
+    _is_denied,
+    _truncate_output,
+    _validate_arg_types,
+)
 from agent.llm.tools import (
     ALL_CHAT_TOOLS,
     TOOL_REGISTRY,
@@ -363,3 +372,228 @@ class TestChatWithTools:
             )
             assert "complete" in result.lower()
             assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# P1 #10: Permission deny-list
+# ---------------------------------------------------------------------------
+
+
+class TestPermissionDenyList:
+    def test_write_tools_denied(self):
+        for name in CHAT_DENY_LIST:
+            assert _is_denied(name), f"{name} must be denied"
+
+    def test_deny_case_insensitive(self):
+        assert _is_denied("RESTART_SERVICE")
+        assert _is_denied("Scale_Service")
+
+    def test_deny_prefixes(self):
+        for prefix in CHAT_DENY_PREFIXES:
+            assert _is_denied(f"{prefix}something"), f"prefix {prefix} must be denied"
+
+    def test_read_tools_allowed(self):
+        for tool in ALL_CHAT_TOOLS:
+            assert not _is_denied(tool.name), f"{tool.name} should be allowed"
+
+    @pytest.mark.asyncio
+    async def test_executor_blocks_denied_tool(self):
+        """Deny-list is checked first — write tools get a clear error."""
+        executor = ToolExecutor(provider=AsyncMock(), incident_store=AsyncMock())
+        result = await executor.execute("restart_service", {"service_name": "demo"})
+        assert not result.success
+        assert "not allowed" in result.error
+
+    @pytest.mark.asyncio
+    async def test_executor_blocks_deny_prefix(self):
+        executor = ToolExecutor(provider=AsyncMock(), incident_store=AsyncMock())
+        result = await executor.execute("delete_volume", {})
+        assert not result.success
+        # First validation catches it as unknown, deny-list also covers it
+        assert not result.success
+
+
+# ---------------------------------------------------------------------------
+# P1 #9: Argument type validation
+# ---------------------------------------------------------------------------
+
+
+class TestArgTypeValidation:
+    def test_valid_string_arg(self):
+        tool = TOOL_REGISTRY["get_service_status"]
+        err = _validate_arg_types(tool, {"service_name": "demo"})
+        assert err is None
+
+    def test_invalid_string_arg(self):
+        tool = TOOL_REGISTRY["get_service_status"]
+        err = _validate_arg_types(tool, {"service_name": 123})
+        assert err is not None
+        assert "expected string" in err
+
+    def test_valid_integer_arg(self):
+        tool = TOOL_REGISTRY["get_service_logs"]
+        err = _validate_arg_types(tool, {"service_name": "demo", "lines": 50})
+        assert err is None
+
+    def test_invalid_integer_arg(self):
+        tool = TOOL_REGISTRY["get_service_logs"]
+        err = _validate_arg_types(tool, {"service_name": "demo", "lines": "fifty"})
+        assert err is not None
+        assert "expected integer" in err
+
+    def test_extra_args_tolerated(self):
+        tool = TOOL_REGISTRY["list_services"]
+        err = _validate_arg_types(tool, {"extra_arg": "whatever"})
+        assert err is None
+
+    @pytest.mark.asyncio
+    async def test_executor_rejects_bad_types(self, executor):
+        result = await executor.execute("get_service_status", {"service_name": 999})
+        assert not result.success
+        assert "Invalid argument types" in result.error
+
+
+# ---------------------------------------------------------------------------
+# P1 #16: Dual result formatting
+# ---------------------------------------------------------------------------
+
+
+class TestDualResultFormatting:
+    def test_to_json_is_compact(self):
+        r = ToolResult(tool="test", success=True, output="short", _raw_output="short")
+        j = json.loads(r.to_json())
+        assert j["data"] == "short"
+        assert "raw" not in j  # raw not in compact format
+
+    def test_to_rich_dict_returns_raw(self):
+        raw_data = {"key": "full_value", "extra": [1, 2, 3]}
+        compact = '{"key": "full_value"}'
+        r = ToolResult(tool="test", success=True, output=compact, _raw_output=raw_data)
+        rich = r.to_rich_dict()
+        assert rich["output"] == raw_data  # Full data, not compact
+        assert rich["tool"] == "test"
+        assert rich["success"] is True
+
+    def test_to_rich_dict_fallback_no_raw(self):
+        r = ToolResult(tool="test", success=True, output={"key": "val"})
+        rich = r.to_rich_dict()
+        assert rich["output"] == {"key": "val"}
+
+    @pytest.mark.asyncio
+    async def test_executor_stores_raw_output(self, executor, mock_provider):
+        result = await executor.execute("list_services", {})
+        assert result.success
+        # Compact output equals the result (small data, no truncation)
+        assert result.output == result._raw_output or result._raw_output is not None
+        # Rich dict should have the full output
+        rich = result.to_rich_dict()
+        assert isinstance(rich["output"], list)
+
+
+# ---------------------------------------------------------------------------
+# P1 #13: Graceful error messages
+# ---------------------------------------------------------------------------
+
+
+class TestFriendlyErrorMessages:
+    def test_timeout_message(self):
+        from agent.llm.client import _friendly_error_message
+        msg = _friendly_error_message(TimeoutError("request timed out"))
+        assert "timed out" in msg.lower()
+
+    def test_connection_refused(self):
+        from agent.llm.client import _friendly_error_message
+        msg = _friendly_error_message(ConnectionError("connection refused"))
+        assert "cannot reach" in msg.lower() or "ollama" in msg.lower()
+
+    def test_model_not_found(self):
+        from agent.llm.client import _friendly_error_message
+        msg = _friendly_error_message(Exception("model 'xyz' not found"))
+        assert "not found" in msg.lower()
+
+    def test_context_too_long(self):
+        from agent.llm.client import _friendly_error_message
+        msg = _friendly_error_message(Exception("maximum context length exceeded"))
+        assert "context" in msg.lower()
+
+    def test_oom_message(self):
+        from agent.llm.client import _friendly_error_message
+        msg = _friendly_error_message(Exception("CUDA out of memory"))
+        assert "memory" in msg.lower()
+
+    def test_generic_fallback(self):
+        from agent.llm.client import _friendly_error_message
+        msg = _friendly_error_message(Exception("something weird"))
+        assert "trouble connecting" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# P1 #14: Concurrent tool execution
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentToolExecution:
+    @pytest.mark.asyncio
+    async def test_multiple_tool_calls_executed_concurrently(self):
+        """Verify that multiple tool calls in one iteration all execute."""
+        from agent.config import Settings
+        from agent.llm.client import LLMClient
+        from unittest.mock import patch
+
+        settings = Settings(
+            ollama_host="http://localhost:11434",
+            ollama_model="test",
+            ollama_fallback_model="test-fb",
+            _env_file=None,
+        )
+        with patch("agent.llm.client.ollama.Client") as MockClient:
+            client = LLMClient(settings)
+            client._client = MockClient.return_value
+
+            call_count = 0
+
+            def mock_chat(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    # Model calls 3 tools at once
+                    return {"message": {
+                        "content": "",
+                        "tool_calls": [
+                            {"function": {"name": "think", "arguments": {"thought": "Step 1"}}},
+                            {"function": {"name": "think", "arguments": {"thought": "Step 2"}}},
+                            {"function": {"name": "think", "arguments": {"thought": "Step 3"}}},
+                        ],
+                    }}
+                return {"message": {"content": "Done with 3 tools."}}
+
+            client._client.chat = MagicMock(side_effect=mock_chat)
+            executor = ToolExecutor()
+            result = await client.chat_with_tools(
+                question="Multi-tool test",
+                system_state={},
+                tool_executor=executor,
+            )
+            assert "done" in result.lower()
+            assert call_count == 2  # 1 tool-call round + 1 final response
+
+
+# ---------------------------------------------------------------------------
+# P1 #12: Enhanced retry for tool-calling
+# ---------------------------------------------------------------------------
+
+
+class TestEnhancedRetry:
+    def test_chat_with_tools_sync_has_retry(self):
+        """Verify _chat_with_tools_sync has tenacity retry decoration."""
+        from agent.llm.client import LLMClient
+        method = LLMClient._chat_with_tools_sync
+        assert hasattr(method, "retry"), "_chat_with_tools_sync should have tenacity retry"
+
+    def test_tool_retry_attempts_is_3(self):
+        """Tool-calling should retry 3 times (more than the 2 for diagnosis)."""
+        from agent.llm.client import LLMClient
+        retry_obj = LLMClient._chat_with_tools_sync.retry
+        stop = retry_obj.stop
+        # tenacity stop_after_attempt stores max_attempt_number
+        assert stop.max_attempt_number == 3

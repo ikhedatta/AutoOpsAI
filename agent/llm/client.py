@@ -32,6 +32,40 @@ from agent.models import Diagnosis
 logger = logging.getLogger(__name__)
 
 
+# ── P1 #13: Error classification for user-friendly messages ──────────────
+
+def _friendly_error_message(exc: Exception) -> str:
+    """Map exception types / messages to operator-friendly error strings."""
+    msg = str(exc).lower()
+
+    if isinstance(exc, TimeoutError) or "timeout" in msg:
+        return (
+            "The LLM request timed out. The model may be loading or the "
+            "server is under heavy load. Please try again in a moment."
+        )
+    if "connection" in msg or "connect" in msg or "refused" in msg:
+        return (
+            "Cannot reach the Ollama server. Please verify it is running "
+            "and the OLLAMA_HOST setting is correct."
+        )
+    if "not found" in msg or "unknown model" in msg or "model" in msg and "pull" in msg:
+        return (
+            "The configured LLM model was not found on the Ollama server. "
+            "Run `ollama pull <model>` to download it."
+        )
+    if "context length" in msg or "too long" in msg or "maximum context" in msg:
+        return (
+            "The conversation exceeded the model's context window. "
+            "Please start a shorter conversation or clear history."
+        )
+    if "out of memory" in msg or "oom" in msg or "cuda" in msg:
+        return (
+            "The Ollama server ran out of GPU/CPU memory. Try a smaller "
+            "model or restart the server."
+        )
+    return "I'm having trouble connecting to my reasoning engine. Please try again."
+
+
 class LLMClient:
 
     def __init__(self, settings: Settings):
@@ -119,9 +153,10 @@ class LLMClient:
         question: str,
         system_state: dict[str, Any],
         incident_context: dict[str, Any] | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[str]:
         """Interactive streaming chat — yields tokens as they arrive."""
-        messages = chat_prompt(question, system_state, incident_context)
+        messages = chat_prompt(question, system_state, incident_context, history)
         async for token in self._chat_stream(messages):
             yield token
 
@@ -219,23 +254,28 @@ class LLMClient:
         question: str,
         system_state: dict[str, Any],
         incident_context: dict[str, Any] | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         """Interactive chat — operator asks the agent about system state."""
-        messages = chat_prompt(question, system_state, incident_context)
+        messages = chat_prompt(question, system_state, incident_context, history)
         try:
             return await self._chat(messages)
-        except Exception:
+        except Exception as exc:
             logger.warning("LLM chat failed", exc_info=True)
-            return "I'm having trouble connecting to my reasoning engine. Please try again."
+            return _friendly_error_message(exc)
 
     # -- tool-augmented chat ------------------------------------------------
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def _chat_with_tools_sync(
         self, messages: list[dict], tools: list[dict],
     ) -> dict:
         """
         Single Ollama call with tool schemas.  Returns the raw message dict
         which may contain ``tool_calls``.
+
+        Uses 3 retry attempts (P1 #12) — tool-calling loops are more
+        latency-tolerant than one-shot diagnosis.
         """
         kwargs: dict[str, Any] = {
             "model": self.model,
@@ -259,6 +299,7 @@ class LLMClient:
         *,
         tool_executor: Any = None,
         max_iterations: int = 5,
+        history: list[dict[str, str]] | None = None,
     ) -> str:
         """
         Tool-augmented chat.  Agent loop pattern:
@@ -268,9 +309,9 @@ class LLMClient:
         4. Falls back to plain chat() if tool-calling fails
         """
         if tool_executor is None:
-            return await self.chat(question, system_state, incident_context)
+            return await self.chat(question, system_state, incident_context, history)
 
-        messages = chat_prompt_with_tools(question, system_state, incident_context)
+        messages = chat_prompt_with_tools(question, system_state, incident_context, history)
         tool_schemas = get_ollama_tool_schemas()
 
         try:
@@ -287,13 +328,21 @@ class LLMClient:
                 # Add the assistant message (with tool_calls) to history
                 messages.append(msg)
 
-                # Execute each tool call and feed results back
+                # P1 #14: Execute all tool calls concurrently (all chat
+                # tools are read-only so parallel is safe).
+                parsed_calls = []
                 for tc in tool_calls:
-                    func = tc.get("function", tc)  # handle both dict formats
-                    tool_name = func.get("name", "unknown")
-                    tool_args = func.get("arguments", {})
+                    func = tc.get("function", tc)
+                    parsed_calls.append((
+                        func.get("name", "unknown"),
+                        func.get("arguments", {}),
+                    ))
 
-                    result = await tool_executor.execute(tool_name, tool_args)
+                results = await asyncio.gather(
+                    *(tool_executor.execute(name, args) for name, args in parsed_calls)
+                )
+
+                for (tool_name, tool_args), result in zip(parsed_calls, results):
                     logger.info(
                         "Tool call [iter=%d]: %s(%s) → success=%s",
                         iteration, tool_name,
@@ -316,6 +365,9 @@ class LLMClient:
             )
             return final.get("content", "I couldn't complete the analysis within the allowed steps.")
 
-        except Exception:
+        except Exception as exc:
             logger.warning("Tool-augmented chat failed, falling back to plain chat", exc_info=True)
-            return await self.chat(question, system_state, incident_context)
+            try:
+                return await self.chat(question, system_state, incident_context)
+            except Exception:
+                return _friendly_error_message(exc)

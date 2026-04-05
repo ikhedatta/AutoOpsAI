@@ -392,14 +392,23 @@ def chat_prompt(
     question: str,
     system_state: dict[str, Any],
     incident_context: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
-    """Build messages for interactive operator questions (no tool access)."""
-    return [
+    """Build messages for interactive operator questions (no tool access).
+
+    ``history`` is a list of ``{"role": "user"|"assistant", "content": ...}``
+    dicts representing recent conversation turns so the model can follow
+    context across messages (e.g. user saying "yes" to a previous suggestion).
+    """
+    msgs: list[dict[str, str]] = [
         {"role": "system", "content": CHAT_SYSTEM_PROMPT},
-        {"role": "user", "content": _build_chat_user_content(
-            question, system_state, incident_context
-        )},
     ]
+    if history:
+        msgs.extend(history)
+    msgs.append({"role": "user", "content": _build_chat_user_content(
+        question, system_state, incident_context
+    )})
+    return msgs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -410,11 +419,18 @@ def chat_prompt_with_tools(
     question: str,
     system_state: dict[str, Any],
     incident_context: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
-    """Build messages for tool-augmented interactive chat."""
-    return [
+    """Build messages for tool-augmented interactive chat.
+
+    ``history`` — see :func:`chat_prompt` for format.
+    """
+    msgs: list[dict[str, str]] = [
         {"role": "system", "content": CHAT_SYSTEM_PROMPT_WITH_TOOLS},
-        {"role": "user", "content": _build_chat_user_content(
-            question, system_state, incident_context
-        )},
     ]
+    if history:
+        msgs.extend(history)
+    msgs.append({"role": "user", "content": _build_chat_user_content(
+        question, system_state, incident_context
+    )})
+    return msgs

@@ -11,6 +11,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agent.api.dependencies import verify_api_key
+from agent.config import get_settings
+from agent.llm.tool_executor import ToolExecutor
 from agent.store import incidents as incident_store
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -22,6 +24,41 @@ class ChatMessage(BaseModel):
 
 
 GENERAL_CHAT_ID = "_general"
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+_ROLE_MAP = {"user": "user", "agent": "assistant"}
+
+
+async def _fetch_recent_history(
+    chat_id: str, max_turns: int,
+) -> list[dict[str, str]]:
+    """Fetch the most recent *max_turns* messages and return as Ollama-
+    compatible ``{role, content}`` dicts.
+
+    ``max_turns`` counts individual messages (not pairs), so 10 means
+    the last ~5 user+agent exchanges.
+
+    We fetch in descending timestamp order (newest first) and reverse so
+    the LLM sees them in chronological order.
+    """
+    if max_turns <= 0:
+        return []
+    # get_chat_history sorts ascending — we need the LAST N, so we query
+    # descending and reverse.
+    from agent.store.models import ChatMessageDoc
+    docs = await (
+        ChatMessageDoc.find(ChatMessageDoc.incident_id == chat_id)
+        .sort("-timestamp")
+        .limit(max_turns)
+        .to_list()
+    )
+    docs.reverse()  # back to chronological order
+    return [
+        {"role": _ROLE_MAP.get(m.role, m.role), "content": m.content}
+        for m in docs
+    ]
 
 
 @router.get("/history")
@@ -86,6 +123,9 @@ async def ask_agent(body: ChatMessage):
 
     # Query the LLM (with tools if enabled)
     settings = get_settings()
+    chat_id = body.incident_id or GENERAL_CHAT_ID
+    history = await _fetch_recent_history(chat_id, settings.chat_history_turns)
+
     if settings.chat_tool_calling_enabled:
         provider = app_state.get("provider")
         tool_executor = ToolExecutor(
@@ -98,16 +138,17 @@ async def ask_agent(body: ChatMessage):
             incident_context=incident_context,
             tool_executor=tool_executor,
             max_iterations=settings.chat_max_tool_iterations,
+            history=history,
         )
     else:
         response = await llm.chat(
             question=body.question,
             system_state=system_state,
             incident_context=incident_context,
+            history=history,
         )
 
     # Persist to MongoDB (always — use _general for non-incident chat)
-    chat_id = body.incident_id or GENERAL_CHAT_ID
     await incident_store.add_chat_message(chat_id, "user", body.question)
     await incident_store.add_chat_message(chat_id, "agent", response)
 
@@ -145,17 +186,21 @@ async def stream_chat(body: ChatMessage):
 
     async def event_generator():
         full_response = []
+        chat_id = body.incident_id or GENERAL_CHAT_ID
+        settings = get_settings()
+        history = await _fetch_recent_history(chat_id, settings.chat_history_turns)
+
         async for token in llm.chat_stream(
             question=body.question,
             system_state=system_state,
             incident_context=incident_context,
+            history=history,
         ):
             full_response.append(token)
             yield f"data: {json.dumps({'token': token})}\n\n"
 
         # Persist to MongoDB before sending the done event
         complete = "".join(full_response)
-        chat_id = body.incident_id or GENERAL_CHAT_ID
         await incident_store.add_chat_message(chat_id, "user", body.question)
         await incident_store.add_chat_message(chat_id, "agent", complete)
 

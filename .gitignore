@@ -14,3 +14,4 @@ __pycache__/
 references/
 .ruff_cache/
 .pytest_cache/
+.autoops.pid
