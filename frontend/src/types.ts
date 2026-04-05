@@ -70,6 +70,8 @@ export interface ActionResult {
 export interface ChatMessage {
   role: 'user' | 'agent' | 'system';
   content: string;
+  timestamp?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TimelineEvent {

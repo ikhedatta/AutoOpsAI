@@ -21,6 +21,24 @@ class ChatMessage(BaseModel):
     incident_id: str | None = None
 
 
+GENERAL_CHAT_ID = "_general"
+
+
+@router.get("/history")
+async def get_general_chat_history(limit: int = 200):
+    """Get the general (non-incident) chat history."""
+    messages = await incident_store.get_chat_history(GENERAL_CHAT_ID, limit=limit)
+    return [
+        {
+            "role": m.role,
+            "content": m.content,
+            "timestamp": m.timestamp.isoformat(),
+            "metadata": m.metadata,
+        }
+        for m in messages
+    ]
+
+
 @router.get("/{incident_id}")
 async def get_chat(incident_id: str):
     """Get the full conversation log for an incident."""
@@ -73,14 +91,10 @@ async def ask_agent(body: ChatMessage):
         incident_context=incident_context,
     )
 
-    # Save to chat history if tied to an incident
-    if body.incident_id:
-        await incident_store.add_chat_message(
-            body.incident_id, "user", body.question
-        )
-        await incident_store.add_chat_message(
-            body.incident_id, "agent", response
-        )
+    # Persist to MongoDB (always — use _general for non-incident chat)
+    chat_id = body.incident_id or GENERAL_CHAT_ID
+    await incident_store.add_chat_message(chat_id, "user", body.question)
+    await incident_store.add_chat_message(chat_id, "agent", response)
 
     return {
         "response": response,
@@ -124,18 +138,14 @@ async def stream_chat(body: ChatMessage):
             full_response.append(token)
             yield f"data: {json.dumps({'token': token})}\n\n"
 
-        # Final event with full response
+        # Persist to MongoDB before sending the done event
         complete = "".join(full_response)
-        yield f"data: {json.dumps({'done': True, 'full_response': complete})}\n\n"
+        chat_id = body.incident_id or GENERAL_CHAT_ID
+        await incident_store.add_chat_message(chat_id, "user", body.question)
+        await incident_store.add_chat_message(chat_id, "agent", complete)
 
-        # Save to chat history if tied to an incident
-        if body.incident_id:
-            await incident_store.add_chat_message(
-                body.incident_id, "user", body.question
-            )
-            await incident_store.add_chat_message(
-                body.incident_id, "agent", complete
-            )
+        # Final event with full response
+        yield f"data: {json.dumps({'done': True, 'full_response': complete})}\n\n"
 
     return StreamingResponse(
         event_generator(),

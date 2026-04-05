@@ -195,9 +195,8 @@ async def add_chat_message(incident_id: str, role: str, content: str, metadata: 
     ).insert()
 
 
-async def get_chat_history(incident_id: str) -> list[ChatMessageDoc]:
-    return (
-        await ChatMessageDoc.find(ChatMessageDoc.incident_id == incident_id)
-        .sort("timestamp")
-        .to_list()
-    )
+async def get_chat_history(incident_id: str, limit: int = 0) -> list[ChatMessageDoc]:
+    q = ChatMessageDoc.find(ChatMessageDoc.incident_id == incident_id).sort("timestamp")
+    if limit > 0:
+        q = q.limit(limit)
+    return await q.to_list()

@@ -51,6 +51,8 @@ export const getAgentConfig = () =>
   request<import('./types').AgentConfig>('/agent/config');
 
 // Chat
+export const getChatHistory = (limit = 200) =>
+  request<import('./types').ChatMessage[]>(`/chat/history?limit=${limit}`);
 export const getChat = (incidentId: string) =>
   request<import('./types').ChatMessage[]>(`/chat/${encodeURIComponent(incidentId)}`);
 export const sendChatMessage = (question: string, incidentId?: string) =>

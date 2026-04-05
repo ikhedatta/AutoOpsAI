@@ -188,6 +188,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(pollRef.current);
   }, [refresh]);
 
+  // Load persisted chat history from MongoDB on mount
+  useEffect(() => {
+    let cancelled = false;
+    api.getChatHistory().then(msgs => {
+      if (cancelled || msgs.length === 0) return;
+      const loaded: ChatMsg[] = msgs.map(m => ({
+        id: chatIdRef.current++,
+        role: m.role as ChatMsg['role'],
+        content: m.content,
+        timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+      }));
+      setChatMessages(prev => {
+        // Keep the initial greeting at index 0, append loaded history after it
+        const greeting = prev.length > 0 && prev[0].id === 0 ? [prev[0]] : [];
+        return [...greeting, ...loaded];
+      });
+    }).catch(() => { /* history unavailable — start fresh */ });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <AppContext.Provider
       value={{
