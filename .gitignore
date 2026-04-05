@@ -10,3 +10,7 @@ __pycache__/
 .python-version
 .env
 .venv/
+
+references/
+.ruff_cache/
+.pytest_cache/

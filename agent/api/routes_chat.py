@@ -84,12 +84,27 @@ async def ask_agent(body: ChatMessage):
                 "evidence": doc.evidence,
             }
 
-    # Query the LLM
-    response = await llm.chat(
-        question=body.question,
-        system_state=system_state,
-        incident_context=incident_context,
-    )
+    # Query the LLM (with tools if enabled)
+    settings = get_settings()
+    if settings.chat_tool_calling_enabled:
+        provider = app_state.get("provider")
+        tool_executor = ToolExecutor(
+            provider=provider,
+            incident_store=incident_store,
+        )
+        response = await llm.chat_with_tools(
+            question=body.question,
+            system_state=system_state,
+            incident_context=incident_context,
+            tool_executor=tool_executor,
+            max_iterations=settings.chat_max_tool_iterations,
+        )
+    else:
+        response = await llm.chat(
+            question=body.question,
+            system_state=system_state,
+            incident_context=incident_context,
+        )
 
     # Persist to MongoDB (always — use _general for non-incident chat)
     chat_id = body.incident_id or GENERAL_CHAT_ID

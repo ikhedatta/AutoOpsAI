@@ -21,10 +21,12 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from agent.config import Settings
 from agent.llm.prompts import (
     chat_prompt,
+    chat_prompt_with_tools,
     diagnosis_prompt,
     novel_issue_prompt,
     summary_prompt,
 )
+from agent.llm.tools import get_ollama_tool_schemas
 from agent.models import Diagnosis
 
 logger = logging.getLogger(__name__)
@@ -225,3 +227,95 @@ class LLMClient:
         except Exception:
             logger.warning("LLM chat failed", exc_info=True)
             return "I'm having trouble connecting to my reasoning engine. Please try again."
+
+    # -- tool-augmented chat ------------------------------------------------
+
+    def _chat_with_tools_sync(
+        self, messages: list[dict], tools: list[dict],
+    ) -> dict:
+        """
+        Single Ollama call with tool schemas.  Returns the raw message dict
+        which may contain ``tool_calls``.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "stream": False,
+        }
+        try:
+            resp = self._client.chat(**kwargs)
+        except Exception:
+            logger.warning("Primary model (tools) failed, trying fallback '%s'", self.fallback_model)
+            kwargs["model"] = self.fallback_model
+            resp = self._client.chat(**kwargs)
+        return resp["message"]
+
+    async def chat_with_tools(
+        self,
+        question: str,
+        system_state: dict[str, Any],
+        incident_context: dict[str, Any] | None = None,
+        *,
+        tool_executor: Any = None,
+        max_iterations: int = 5,
+    ) -> str:
+        """
+        Tool-augmented chat.  Agent loop pattern:
+        1. Send messages + tool schemas to Ollama
+        2. If model returns tool_calls → execute tools → feed results back
+        3. Loop until model returns a text response (or max_iterations)
+        4. Falls back to plain chat() if tool-calling fails
+        """
+        if tool_executor is None:
+            return await self.chat(question, system_state, incident_context)
+
+        messages = chat_prompt_with_tools(question, system_state, incident_context)
+        tool_schemas = get_ollama_tool_schemas()
+
+        try:
+            for iteration in range(max_iterations):
+                msg = await asyncio.to_thread(
+                    self._chat_with_tools_sync, messages, tool_schemas,
+                )
+
+                tool_calls = msg.get("tool_calls")
+                if not tool_calls:
+                    # Model produced a final text response
+                    return msg.get("content", "")
+
+                # Add the assistant message (with tool_calls) to history
+                messages.append(msg)
+
+                # Execute each tool call and feed results back
+                for tc in tool_calls:
+                    func = tc.get("function", tc)  # handle both dict formats
+                    tool_name = func.get("name", "unknown")
+                    tool_args = func.get("arguments", {})
+
+                    result = await tool_executor.execute(tool_name, tool_args)
+                    logger.info(
+                        "Tool call [iter=%d]: %s(%s) → success=%s",
+                        iteration, tool_name,
+                        json.dumps(tool_args, default=str)[:100],
+                        result.success,
+                    )
+
+                    messages.append({
+                        "role": "tool",
+                        "content": result.to_json(),
+                    })
+
+            # Exhausted iterations — ask model to summarise
+            messages.append({
+                "role": "user",
+                "content": "Please summarise your findings so far in a concise answer.",
+            })
+            final = await asyncio.to_thread(
+                self._chat_with_tools_sync, messages, [],
+            )
+            return final.get("content", "I couldn't complete the analysis within the allowed steps.")
+
+        except Exception:
+            logger.warning("Tool-augmented chat failed, falling back to plain chat", exc_info=True)
+            return await self.chat(question, system_state, incident_context)

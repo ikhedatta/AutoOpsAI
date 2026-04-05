@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     max_concurrent_remediations: int = 3
     playbooks_dir: str = "playbooks"
 
+    # -- Tool-augmented chat -------------------------------------------------
+    chat_tool_calling_enabled: bool = True
+    chat_max_tool_iterations: int = 5
+    tool_timeout_seconds: int = 5
+
     # -- Docker host override ------------------------------------------------
     docker_host: str = ""
 

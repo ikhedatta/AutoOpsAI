@@ -11,8 +11,20 @@ import pytest_asyncio
 from agent.config import Settings
 from agent.llm.client import LLMClient
 from agent.llm.prompts import (
+    CHAT_SYSTEM_PROMPT,
+    CHAT_SYSTEM_PROMPT_WITH_TOOLS,
+    FEW_SHOT_DIAGNOSIS,
     SYSTEM_PROMPT,
+    VALID_ACTIONS,
+    _build_system_prompt,
+    _capabilities_block,
+    _identity_block,
+    _output_discipline_block,
+    _reasoning_block,
+    _safety_block,
+    _tool_instructions_block,
     chat_prompt,
+    chat_prompt_with_tools,
     diagnosis_prompt,
     novel_issue_prompt,
     summary_prompt,
@@ -252,6 +264,53 @@ class TestPrompts:
         assert "AutoOps AI" in SYSTEM_PROMPT
         assert "virtual DevOps engineer" in SYSTEM_PROMPT
 
+    def test_system_prompt_has_reasoning_framework(self):
+        assert "Observe" in SYSTEM_PROMPT
+        assert "Hypothesise" in SYSTEM_PROMPT
+        assert "Act" in SYSTEM_PROMPT
+
+    def test_system_prompt_has_capabilities(self):
+        assert "restart_service" in SYSTEM_PROMPT
+        assert "scale_service" in SYSTEM_PROMPT
+        assert "escalate" in SYSTEM_PROMPT
+
+    def test_system_prompt_has_safety(self):
+        assert "Never fabricate" in SYSTEM_PROMPT
+        assert "Confidence Calibration" in SYSTEM_PROMPT
+
+    def test_composable_blocks_are_independent(self):
+        identity = _identity_block()
+        reasoning = _reasoning_block()
+        capabilities = _capabilities_block()
+        safety = _safety_block()
+        assert "AutoOps AI" in identity
+        assert "Observe" in reasoning
+        assert "restart_service" in capabilities
+        assert "0.0" in safety and "0.9" in safety
+
+    def test_build_system_prompt_joins_blocks(self):
+        result = _build_system_prompt("block1", "block2", "block3")
+        assert "block1\n\nblock2\n\nblock3" == result
+
+    def test_chat_system_prompt_no_json(self):
+        assert "NOT JSON" in CHAT_SYSTEM_PROMPT
+        assert "Respond ONLY with valid JSON" not in CHAT_SYSTEM_PROMPT
+
+    def test_chat_system_prompt_with_tools_has_instructions(self):
+        assert "Tool Usage Rules" in CHAT_SYSTEM_PROMPT_WITH_TOOLS
+        assert "get_service_status" in CHAT_SYSTEM_PROMPT_WITH_TOOLS
+        assert "think" in CHAT_SYSTEM_PROMPT_WITH_TOOLS
+
+    def test_valid_actions_list(self):
+        assert "restart_service" in VALID_ACTIONS
+        assert "escalate" in VALID_ACTIONS
+        assert len(VALID_ACTIONS) >= 7
+
+    def test_few_shot_diagnosis(self):
+        assert "summary" in FEW_SHOT_DIAGNOSIS
+        assert "confidence" in FEW_SHOT_DIAGNOSIS
+        assert "recommended_actions" in FEW_SHOT_DIAGNOSIS
+
     def test_diagnosis_prompt_structure(self):
         msgs = diagnosis_prompt(
             anomaly={"service_name": "demo", "anomaly_type": "high_cpu", "metric": "cpu_percent",
@@ -264,6 +323,33 @@ class TestPrompts:
         assert "demo" in msgs[1]["content"]
         assert "high_cpu" in msgs[1]["content"]
 
+    def test_diagnosis_prompt_has_reasoning_steps(self):
+        msgs = diagnosis_prompt(
+            anomaly={"service_name": "demo", "anomaly_type": "high_cpu"},
+            metrics={"demo": {"cpu_percent": 95}},
+        )
+        content = msgs[1]["content"]
+        assert "Reasoning Steps" in content
+        assert "blast radius" in content.lower()
+
+    def test_diagnosis_prompt_constrains_actions(self):
+        msgs = diagnosis_prompt(
+            anomaly={"service_name": "demo"},
+            metrics={},
+        )
+        content = msgs[1]["content"]
+        assert "ONLY from:" in content
+        assert "restart_service" in content
+        assert "escalate" in content
+
+    def test_diagnosis_prompt_has_few_shot(self):
+        msgs = diagnosis_prompt(
+            anomaly={"service_name": "demo"},
+            metrics={},
+        )
+        content = msgs[1]["content"]
+        assert "Example output" in content
+
     def test_diagnosis_prompt_with_playbook(self):
         msgs = diagnosis_prompt(
             anomaly={"service_name": "demo"},
@@ -272,6 +358,7 @@ class TestPrompts:
         )
         content = msgs[1]["content"]
         assert "Check memory allocation" in content
+        assert "validate against the metrics" in content.lower() or "primary reference" in content.lower()
 
     def test_diagnosis_prompt_with_logs(self):
         msgs = diagnosis_prompt(
@@ -288,6 +375,17 @@ class TestPrompts:
         )
         assert len(msgs) == 2
         assert "No Playbook Match" in msgs[1]["content"]
+
+    def test_novel_issue_prompt_has_checklist(self):
+        msgs = novel_issue_prompt(metrics={"demo": {"cpu_percent": 50}})
+        content = msgs[1]["content"]
+        assert "Diagnostic Checklist" in content
+        assert "confidence" in content.lower() and "0.5" in content
+
+    def test_novel_issue_prompt_constrains_actions(self):
+        msgs = novel_issue_prompt(metrics={})
+        content = msgs[1]["content"]
+        assert "ONLY from:" in content
 
     def test_summary_prompt_structure(self):
         msgs = summary_prompt({"title": "CPU Alert", "service_name": "demo", "severity": "HIGH"})
@@ -311,3 +409,20 @@ class TestPrompts:
         content = msgs[1]["content"]
         assert "inc_123" in content
         assert "High CPU" in content
+
+    def test_chat_prompt_with_tools_structure(self):
+        msgs = chat_prompt_with_tools(
+            question="What is the status of redis?",
+            system_state={"redis": {"state": "running", "cpu_percent": 10, "memory_percent": 30}},
+        )
+        assert len(msgs) == 2
+        assert "Tool Usage Rules" in msgs[0]["content"]
+        assert "redis" in msgs[1]["content"]
+
+    def test_chat_prompt_with_tools_has_incident(self):
+        msgs = chat_prompt_with_tools(
+            question="Tell me more",
+            system_state={},
+            incident_context={"incident_id": "inc_1", "title": "test"},
+        )
+        assert "inc_1" in msgs[1]["content"]
