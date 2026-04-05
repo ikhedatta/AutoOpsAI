@@ -1,0 +1,52 @@
+id: nginx_502
+name: "Nginx returning 502 Bad Gateway"
+severity: MEDIUM
+tags: ["proxy", "nginx", "gateway"]
+cooldown_seconds: 120
+provider: docker_compose
+
+detection:
+  type: compound
+  conditions:
+    - type: health_endpoint
+      service_name: nginx
+      expected_status: 200
+
+diagnosis: >
+  Nginx is returning 502 Bad Gateway errors. This typically means the
+  upstream backend (demo-app) is unreachable. Check if the backend container
+  is running and its health endpoint is responding.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: nginx
+      lines: 30
+
+    - action: collect_logs
+      target: demo-app
+      lines: 30
+
+    - action: health_check
+      target: demo-app
+      timeout: 5
+
+    - action: restart_service
+      target: demo-app
+      timeout: 30
+
+    - action: wait
+      seconds: 5
+
+    - action: health_check
+      target: nginx
+      timeout: 10
+
+rollback:
+  description: "If restarting demo-app doesn't resolve the 502"
+  steps:
+    - action: restart_service
+      target: nginx
+      timeout: 15
+    - action: escalate
+      message: "Nginx 502 persists after restarting backend and proxy. Manual check required."

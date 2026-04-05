@@ -1,0 +1,40 @@
+id: redis_memory_full
+name: "Redis memory approaching limit"
+severity: LOW
+tags: ["cache", "redis", "memory"]
+cooldown_seconds: 300
+provider: docker_compose
+
+detection:
+  type: metric_threshold
+  conditions:
+    - type: metric_threshold
+      metric: memory_percent
+      threshold: "> 85"
+
+diagnosis: >
+  Redis memory usage is critically high. This can cause eviction of keys,
+  rejected writes, or OOM kills. A restart clears the in-memory store.
+  Data loss is expected for non-persistent Redis configurations.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: demo-redis
+      lines: 30
+
+    - action: exec_command
+      target: demo-redis
+      command: "redis-cli DBSIZE"
+      timeout: 5
+
+    - action: restart_service
+      target: demo-redis
+      timeout: 15
+
+    - action: wait
+      seconds: 3
+
+    - action: health_check
+      target: demo-redis
+      timeout: 10

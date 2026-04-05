@@ -1,0 +1,46 @@
+id: container_oom_killed
+name: "Container killed by OOM"
+severity: HIGH
+tags: ["oom", "memory", "container"]
+cooldown_seconds: 180
+provider: docker_compose
+
+detection:
+  type: container_health
+  conditions:
+    - type: container_health
+      service_name: demo-app
+      state: error
+
+diagnosis: >
+  A container was killed by the Linux OOM (Out-Of-Memory) killer. This means
+  the container exceeded its memory limit. Check application memory usage
+  patterns, possible memory leaks, and consider increasing the memory limit
+  if the workload justifies it.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: demo-app
+      lines: 100
+
+    - action: collect_diagnostics
+      target: demo-app
+      command: "cat /proc/meminfo"
+
+    - action: restart_service
+      target: demo-app
+      timeout: 30
+
+    - action: wait
+      seconds: 10
+
+    - action: health_check
+      target: demo-app
+      timeout: 15
+
+rollback:
+  description: "If OOM keeps occurring"
+  steps:
+    - action: escalate
+      message: "Container keeps getting OOM killed. Memory limit increase or application fix required."

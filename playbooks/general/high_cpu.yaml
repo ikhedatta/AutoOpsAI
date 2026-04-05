@@ -1,0 +1,40 @@
+id: high_cpu
+name: "Sustained high CPU usage"
+severity: MEDIUM
+tags: ["cpu", "performance"]
+cooldown_seconds: 300
+
+detection:
+  type: metric_threshold
+  conditions:
+    - type: metric_threshold
+      metric: cpu_percent
+      threshold: "> 90"
+
+diagnosis: >
+  CPU usage has been sustained above 90%. This can indicate a runaway process,
+  increased traffic, or an application bug causing excessive computation.
+  A restart may temporarily resolve it, but root cause analysis is recommended.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 50
+
+    - action: exec_command
+      target: "{service_name}"
+      command: "top -bn1 | head -20"
+      timeout: 10
+
+    - action: restart_service
+      target: "{service_name}"
+      timeout: 30
+
+    - action: wait
+      seconds: 10
+
+    - action: metric_check
+      metric: cpu_percent
+      expected: "< 80"
+      timeout: 30

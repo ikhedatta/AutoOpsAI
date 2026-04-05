@@ -1,0 +1,34 @@
+id: high_memory
+name: "High memory usage"
+severity: MEDIUM
+tags: ["memory", "performance"]
+cooldown_seconds: 300
+
+detection:
+  type: metric_threshold
+  conditions:
+    - type: metric_threshold
+      metric: memory_percent
+      threshold: "> 85"
+
+diagnosis: >
+  Memory usage has exceeded 85%. This may lead to OOM kills, degraded
+  performance, or swap thrashing. Common causes: memory leaks, cache
+  bloat, or legitimately increased workload.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 30
+
+    - action: restart_service
+      target: "{service_name}"
+      timeout: 30
+
+    - action: wait
+      seconds: 10
+
+    - action: health_check
+      target: "{service_name}"
+      timeout: 15

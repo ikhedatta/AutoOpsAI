@@ -1,0 +1,37 @@
+id: disk_full
+name: "Disk usage critical"
+severity: HIGH
+tags: ["disk", "storage"]
+cooldown_seconds: 600
+
+detection:
+  type: metric_threshold
+  conditions:
+    - type: metric_threshold
+      metric: disk_percent
+      threshold: "> 95"
+
+diagnosis: >
+  Disk usage has exceeded 95%. Services may fail to write data, logs,
+  or temporary files. Immediate action required: clean up unnecessary
+  files, rotate logs, or expand storage.
+
+remediation:
+  steps:
+    - action: exec_command
+      target: "{service_name}"
+      command: "df -h"
+      timeout: 5
+
+    - action: exec_command
+      target: "{service_name}"
+      command: "du -sh /tmp/* 2>/dev/null | sort -rh | head -10"
+      timeout: 10
+
+    - action: exec_command
+      target: "{service_name}"
+      command: "find /tmp -type f -mtime +7 -delete 2>/dev/null; echo 'Cleaned /tmp'"
+      timeout: 15
+
+    - action: escalate
+      message: "Disk usage critical. Temporary files cleaned but root cause needs investigation."

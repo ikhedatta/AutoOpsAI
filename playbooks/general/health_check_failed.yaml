@@ -1,0 +1,40 @@
+id: health_check_failed
+name: "Health check failing"
+severity: MEDIUM
+tags: ["health", "availability"]
+cooldown_seconds: 120
+
+detection:
+  type: health_endpoint
+  conditions:
+    - type: health_endpoint
+      service_name: "{any}"
+      expected_status: 200
+
+diagnosis: >
+  The health check endpoint is not returning the expected 200 OK response.
+  The service may be overloaded, stuck, or partially crashed. A restart
+  is the standard first response.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 50
+
+    - action: restart_service
+      target: "{service_name}"
+      timeout: 30
+
+    - action: wait
+      seconds: 10
+
+    - action: health_check
+      target: "{service_name}"
+      timeout: 15
+
+rollback:
+  description: "If health check keeps failing after restart"
+  steps:
+    - action: escalate
+      message: "Health check still failing after restart. Service may need manual investigation."

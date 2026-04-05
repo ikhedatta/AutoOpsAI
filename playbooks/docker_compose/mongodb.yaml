@@ -1,0 +1,44 @@
+id: mongodb_container_down
+name: "MongoDB container crash"
+severity: MEDIUM
+tags: ["database", "mongodb", "container-health"]
+cooldown_seconds: 120
+provider: docker_compose
+
+detection:
+  type: compound
+  conditions:
+    - type: container_health
+      service_name: mongodb-demo
+      state: stopped
+
+diagnosis: >
+  MongoDB container has stopped running. This is causing database-dependent
+  services to fail. Common causes: OOM kill, disk full, or unclean shutdown.
+  Restarting the container should restore service if no data corruption occurred.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: mongodb-demo
+      lines: 50
+
+    - action: restart_service
+      target: mongodb-demo
+      timeout: 30
+
+    - action: wait
+      seconds: 5
+
+    - action: health_check
+      target: mongodb-demo
+      timeout: 15
+
+rollback:
+  description: "If MongoDB fails to restart after attempts"
+  steps:
+    - action: collect_logs
+      target: mongodb-demo
+      lines: 200
+    - action: escalate
+      message: "MongoDB failed to restart. Logs attached. Manual investigation required."

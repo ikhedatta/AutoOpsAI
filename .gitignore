@@ -1,0 +1,12 @@
+.claude/
+.claire/
+*.pyc
+__pycache__/
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+.python-version
+.env
+.venv/

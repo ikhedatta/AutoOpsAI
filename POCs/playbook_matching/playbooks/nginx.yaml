@@ -1,0 +1,32 @@
+- id: nginx_502_errors
+  name: "Nginx returning 502 Bad Gateway"
+  severity: HIGH
+  detection:
+    type: log_pattern
+    conditions:
+      - container_name: "nginx"
+        pattern: "502 Bad Gateway"
+        rate: "> 10/min"
+  diagnosis: >
+    Nginx is returning 502 errors, indicating the upstream Flask application
+    is unreachable or timing out. This could be caused by the app crashing,
+    port binding issues, or network connectivity problems within Docker.
+  remediation:
+    steps:
+      - action: health_check
+        target: flask-app
+        check: "curl -s http://flask-app:5000/health"
+      - action: docker_restart
+        target: flask-app
+        timeout: 30s
+      - action: health_check
+        target: nginx
+        check: "curl -s http://localhost:80/health"
+        timeout: 15s
+  rollback:
+    description: "If Flask app won't start, check application logs for crash reason"
+    steps:
+      - action: collect_logs
+        target: flask-app
+      - action: escalate
+        message: "Flask application failed to restart. Check logs for stack trace."

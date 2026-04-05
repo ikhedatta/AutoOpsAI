@@ -1,0 +1,67 @@
+- id: high_cpu_container
+  name: "Container CPU spike"
+  severity: MEDIUM
+  detection:
+    type: metric_threshold
+    conditions:
+      - metric: "container_cpu_percent"
+        threshold: "> 90%"
+        duration: "2m"
+  diagnosis: >
+    Container CPU usage has been above 90% for over 2 minutes. This may
+    indicate a resource leak, runaway process, or insufficient allocation.
+  remediation:
+    steps:
+      - action: collect_diagnostics
+        command: "docker exec {container} top -bn1"
+      - action: docker_restart
+        target: "{container}"
+        timeout: 30s
+      - action: metric_check
+        metric: "container_cpu_percent"
+        expected: "< 50%"
+        timeout: 30s
+
+- id: high_memory_container
+  name: "Container memory pressure"
+  severity: MEDIUM
+  detection:
+    type: metric_threshold
+    conditions:
+      - metric: "container_memory_percent"
+        threshold: "> 85%"
+        duration: "1m"
+  diagnosis: >
+    Container memory usage is critically high. Risk of OOM kill if it continues
+    to climb. May be caused by a memory leak or unexpected traffic spike.
+  remediation:
+    steps:
+      - action: collect_diagnostics
+        command: "docker stats {container} --no-stream"
+      - action: docker_restart
+        target: "{container}"
+        timeout: 30s
+      - action: metric_check
+        metric: "container_memory_percent"
+        expected: "< 50%"
+        timeout: 30s
+
+- id: container_restart_loop
+  name: "Container restart loop detected"
+  severity: HIGH
+  detection:
+    type: container_health
+    conditions:
+      - restart_count: "> 3"
+        window: "10m"
+  diagnosis: >
+    Container is restarting repeatedly, indicating a persistent crash. Simply
+    restarting again is unlikely to help. Logs need to be collected and the
+    root cause investigated.
+  remediation:
+    steps:
+      - action: collect_logs
+        target: "{container}"
+        tail: 200
+      - action: escalate
+        message: "Container {container} is in a restart loop. Logs collected for investigation."

@@ -1,0 +1,40 @@
+- id: redis_memory_full
+  name: "Redis memory at capacity"
+  severity: LOW
+  detection:
+    type: metric_threshold
+    conditions:
+      - metric: "redis_memory_used_ratio"
+        threshold: "> 0.90"
+  diagnosis: >
+    Redis memory usage has exceeded 90%. This may cause eviction of cached
+    data and increased latency on cache-dependent endpoints.
+  remediation:
+    steps:
+      - action: redis_command
+        command: "MEMORY PURGE"
+      - action: metric_check
+        metric: "redis_memory_used_ratio"
+        expected: "< 0.60"
+        timeout: 10s
+
+- id: redis_connection_refused
+  name: "Redis connection refused"
+  severity: MEDIUM
+  detection:
+    type: container_health
+    conditions:
+      - container_name: "redis"
+        status: "exited"
+  diagnosis: >
+    Redis container is not running. Cached data is unavailable and services
+    depending on Redis will experience increased latency or failures.
+  remediation:
+    steps:
+      - action: docker_restart
+        target: redis
+        timeout: 20s
+      - action: health_check
+        target: redis
+        check: "redis-cli ping"
+        timeout: 10s
