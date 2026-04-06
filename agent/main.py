@@ -67,16 +67,22 @@ async def lifespan(application: FastAPI):
     logger.info("Knowledge base: %d playbooks", len(kb.playbooks))
 
     # 4. LLM client
-    from agent.llm.client import LLMClient
-    llm = LLMClient(settings)
+    if settings.llm_provider == "github" and settings.github_token:
+        from agent.llm.github_client import GitHubLLMClient
+        llm = GitHubLLMClient(settings)
+        logger.info("Using GitHub Models LLM provider (model=%s)", settings.github_model)
+    else:
+        from agent.llm.client import LLMClient
+        llm = LLMClient(settings)
+        logger.info("Using Ollama LLM provider (model=%s)", settings.ollama_model)
     app_state["llm_client"] = llm
     ollama_ok = await llm.is_available()
     app_state["ollama_available"] = ollama_ok
     if ollama_ok:
         await llm.warm_up()
-        logger.info("Ollama available: model=%s", settings.ollama_model)
+        logger.info("LLM available: provider=%s", settings.llm_provider)
     else:
-        logger.warning("Ollama not available — running in playbook-only mode")
+        logger.warning("LLM not available — running in playbook-only mode")
 
     # 5. Engine
     from agent.engine.engine import AgentEngine

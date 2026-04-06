@@ -20,11 +20,21 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # -- LLM Provider -------------------------------------------------------
+    llm_provider: str = "ollama"  # "ollama" or "github"
+
     # -- LLM (Ollama) -------------------------------------------------------
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "gemma3:4b"
     ollama_fallback_model: str = "qwen3:4b"
     ollama_timeout: int = 120
+
+    # -- LLM (GitHub Models) ------------------------------------------------
+    github_token: str = ""
+    github_model: str = "gpt-4o"
+    github_models_endpoint: str = "https://models.inference.ai.azure.com"
+    llm_max_tokens: int = 4096
+    llm_timeout: int = 120
 
     # -- Infrastructure Provider ---------------------------------------------
     provider_type: str = "docker_compose"

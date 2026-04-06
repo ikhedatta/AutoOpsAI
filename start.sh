@@ -54,11 +54,23 @@ else
     fi
 fi
 
-echo -n "Checking Ollama...      "
-if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-    echo -e "${GREEN}✓ running${NC}"
+LLM_PROVIDER=$(grep -i '^LLM_PROVIDER=' .env 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || echo "ollama")
+if [ "$LLM_PROVIDER" = "github" ]; then
+    echo -n "Checking GitHub Models..."
+    GH_ENDPOINT=$(grep -i '^GITHUB_MODELS_ENDPOINT=' .env 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || echo "https://models.inference.ai.azure.com")
+    if curl -sf "$GH_ENDPOINT" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ reachable${NC}"
+    else
+        echo -e "${YELLOW}⚠ not reachable (LLM features may be unavailable)${NC}"
+    fi
 else
-    echo -e "${YELLOW}⚠ not reachable (LLM features will be unavailable)${NC}"
+    echo -n "Checking Ollama...      "
+    OLLAMA_URL=$(grep -i '^OLLAMA_HOST=' .env 2>/dev/null | cut -d= -f2 | awk '{print $1}' || echo "http://localhost:11434")
+    if curl -sf "${OLLAMA_URL:-http://localhost:11434}/api/tags" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ running${NC}"
+    else
+        echo -e "${YELLOW}⚠ not reachable (LLM features will be unavailable)${NC}"
+    fi
 fi
 
 echo -n "Checking Docker...      "

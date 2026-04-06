@@ -37,13 +37,30 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM --- Check Ollama ---
-echo Checking Ollama...
-curl -sf http://localhost:11434/api/tags >nul 2>&1
-if %errorlevel% equ 0 (
-    echo   [OK] Ollama running
+REM --- Check LLM Provider ---
+for /f "tokens=1,2 delims==" %%a in ('findstr /i "^LLM_PROVIDER=" .env 2^>nul') do set "LLM_PROVIDER=%%b"
+if not defined LLM_PROVIDER set "LLM_PROVIDER=ollama"
+if /i "!LLM_PROVIDER!"=="github" (
+    echo Checking GitHub Models API...
+    for /f "tokens=1,2 delims==" %%a in ('findstr /i "^GITHUB_MODELS_ENDPOINT=" .env 2^>nul') do set "GH_ENDPOINT=%%b"
+    if not defined GH_ENDPOINT set "GH_ENDPOINT=https://models.inference.ai.azure.com"
+    curl -sf "!GH_ENDPOINT!" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo   [OK] GitHub Models API reachable
+    ) else (
+        echo   [!] GitHub Models API not reachable ^(LLM features may be unavailable^)
+    )
 ) else (
-    echo   [!] Ollama not reachable ^(LLM features will be unavailable^)
+    echo Checking Ollama...
+    for /f "tokens=1,2 delims==" %%a in ('findstr /i "^OLLAMA_HOST=" .env 2^>nul') do set "OLLAMA_URL=%%b"
+    if not defined OLLAMA_URL set "OLLAMA_URL=http://localhost:11434"
+    for /f "tokens=1" %%u in ("!OLLAMA_URL!") do set "OLLAMA_URL=%%u"
+    curl -sf "!OLLAMA_URL!/api/tags" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo   [OK] Ollama running
+    ) else (
+        echo   [!] Ollama not reachable ^(LLM features will be unavailable^)
+    )
 )
 
 REM --- Check Docker ---
