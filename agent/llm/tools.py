@@ -165,6 +165,171 @@ THINK = ToolDefinition(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Observability tools (Prometheus, Loki, Grafana)
+# ═══════════════════════════════════════════════════════════════════════════
+
+PROMETHEUS_QUERY = ToolDefinition(
+    name="prometheus_query",
+    description=(
+        "Execute an instant PromQL query against Prometheus. Returns current metric values. "
+        "Use for checking error rates, CPU usage, memory, up status, etc. "
+        "Example queries: 'up', 'node_cpu_seconds_total', 'rate(http_requests_total[5m])'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "promql": {
+                "type": "string",
+                "description": "PromQL expression to execute.",
+            },
+        },
+        "required": ["promql"],
+    },
+    timeout_seconds=10,
+)
+
+PROMETHEUS_QUERY_RANGE = ToolDefinition(
+    name="prometheus_query_range",
+    description=(
+        "Execute a range PromQL query — returns time-series data over a window. "
+        "Use for trend analysis: CPU over time, memory growth, error rate spikes."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "promql": {
+                "type": "string",
+                "description": "PromQL expression.",
+            },
+            "duration_minutes": {
+                "type": "integer",
+                "description": "How far back to query, in minutes. Default 30.",
+            },
+            "step": {
+                "type": "string",
+                "description": "Query resolution step. Default '60s'.",
+            },
+        },
+        "required": ["promql"],
+    },
+    timeout_seconds=15,
+)
+
+PROMETHEUS_GET_ALERTS = ToolDefinition(
+    name="prometheus_get_alerts",
+    description="Get all currently active/firing alerts from Prometheus.",
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    timeout_seconds=10,
+)
+
+PROMETHEUS_GET_TARGETS = ToolDefinition(
+    name="prometheus_get_targets",
+    description=(
+        "Get all Prometheus scrape targets and their health (up/down). "
+        "Use to check if monitoring targets are reachable."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    timeout_seconds=10,
+)
+
+LOKI_QUERY_LOGS = ToolDefinition(
+    name="loki_query_logs",
+    description=(
+        "Query logs from Loki using LogQL. ALWAYS use this when asked about errors, warnings, "
+        "or recent log activity. Examples: '{container=\"grafana\"}', "
+        "'{container=\"nginx\"} |= \"error\"', '{job=\"varlogs\"} |~ \"(?i)error|warn|fatal\"'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "logql": {
+                "type": "string",
+                "description": "LogQL query expression.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max log lines to return. Default 50.",
+            },
+            "duration_minutes": {
+                "type": "integer",
+                "description": "How far back to search, in minutes. Default 60.",
+            },
+        },
+        "required": ["logql"],
+    },
+    timeout_seconds=15,
+)
+
+LOKI_GET_LABELS = ToolDefinition(
+    name="loki_get_labels",
+    description=(
+        "List all available log labels in Loki (e.g. 'container', 'job', 'host'). "
+        "Use to discover what log streams are available before querying."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    timeout_seconds=10,
+)
+
+LOKI_GET_LABEL_VALUES = ToolDefinition(
+    name="loki_get_label_values",
+    description=(
+        "Get all values for a specific Loki label. "
+        "Example: label='container' returns all container names with logs."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "label": {
+                "type": "string",
+                "description": "Label name to get values for (e.g. 'container', 'job').",
+            },
+        },
+        "required": ["label"],
+    },
+    timeout_seconds=10,
+)
+
+GRAFANA_LIST_DASHBOARDS = ToolDefinition(
+    name="grafana_list_dashboards",
+    description="List all Grafana dashboards. Use to find dashboards by name or tag.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Optional search query to filter dashboards.",
+            },
+        },
+        "required": [],
+    },
+    timeout_seconds=10,
+)
+
+GRAFANA_GET_DATASOURCES = ToolDefinition(
+    name="grafana_get_datasources",
+    description="List all configured Grafana data sources (Prometheus, Loki, etc.).",
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    timeout_seconds=10,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Registry and schema export
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -177,6 +342,18 @@ ALL_CHAT_TOOLS: tuple[ToolDefinition, ...] = (
     GET_ACTIVE_INCIDENTS,
     GET_INCIDENT_HISTORY,
     THINK,
+    # Observability — Prometheus
+    PROMETHEUS_QUERY,
+    PROMETHEUS_QUERY_RANGE,
+    PROMETHEUS_GET_ALERTS,
+    PROMETHEUS_GET_TARGETS,
+    # Observability — Loki (logs)
+    LOKI_QUERY_LOGS,
+    LOKI_GET_LABELS,
+    LOKI_GET_LABEL_VALUES,
+    # Observability — Grafana
+    GRAFANA_LIST_DASHBOARDS,
+    GRAFANA_GET_DATASOURCES,
 )
 
 TOOL_REGISTRY: dict[str, ToolDefinition] = {t.name: t for t in ALL_CHAT_TOOLS}

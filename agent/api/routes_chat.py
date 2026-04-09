@@ -28,6 +28,28 @@ GENERAL_CHAT_ID = "_general"
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+async def _enrich_with_observability_context(
+    system_state: dict, app_state: dict,
+) -> dict:
+    """Add observability source info to system_state so the LLM knows
+    what it can query via tools — even when Docker services are not found."""
+    obs: dict = {}
+    loki = app_state.get("loki")
+    if loki and await loki.is_available():
+        containers = await loki.get_label_values("container")
+        obs["loki"] = "available"
+        obs["loki_containers"] = containers or []
+    prom = app_state.get("prometheus")
+    if prom and await prom.is_available():
+        obs["prometheus"] = "available"
+    grafana = app_state.get("grafana")
+    if grafana and await grafana.is_available():
+        obs["grafana"] = "available"
+    if obs:
+        system_state["_observability"] = obs
+    return system_state
+
+
 _ROLE_MAP = {"user": "user", "agent": "assistant"}
 
 
@@ -108,6 +130,10 @@ async def ask_agent(body: ChatMessage):
     if collector:
         system_state = await collector.collect_once()
 
+    # Always include observability source info so the LLM knows what
+    # tools are available (even when Docker services are not running).
+    system_state = await _enrich_with_observability_context(system_state, app_state)
+
     # Build incident context if specified
     incident_context = None
     if body.incident_id:
@@ -131,6 +157,9 @@ async def ask_agent(body: ChatMessage):
         tool_executor = ToolExecutor(
             provider=provider,
             incident_store=incident_store,
+            prometheus=app_state.get("prometheus"),
+            loki=app_state.get("loki"),
+            grafana=app_state.get("grafana"),
         )
         response = await llm.chat_with_tools(
             question=body.question,
@@ -172,6 +201,8 @@ async def stream_chat(body: ChatMessage):
     if collector:
         system_state = await collector.collect_once()
 
+    system_state = await _enrich_with_observability_context(system_state, app_state)
+
     incident_context = None
     if body.incident_id:
         doc = await incident_store.get_incident(body.incident_id)
@@ -190,12 +221,33 @@ async def stream_chat(body: ChatMessage):
         settings = get_settings()
         history = await _fetch_recent_history(chat_id, settings.chat_history_turns)
 
-        async for token in llm.chat_stream(
-            question=body.question,
-            system_state=system_state,
-            incident_context=incident_context,
-            history=history,
-        ):
+        # Use tool-augmented streaming when enabled and the LLM supports it
+        if settings.chat_tool_calling_enabled and hasattr(llm, "chat_stream_with_tools"):
+            provider = app_state.get("provider")
+            tool_executor = ToolExecutor(
+                provider=provider,
+                incident_store=incident_store,
+                prometheus=app_state.get("prometheus"),
+                loki=app_state.get("loki"),
+                grafana=app_state.get("grafana"),
+            )
+            token_iter = llm.chat_stream_with_tools(
+                question=body.question,
+                system_state=system_state,
+                incident_context=incident_context,
+                tool_executor=tool_executor,
+                max_iterations=settings.chat_max_tool_iterations,
+                history=history,
+            )
+        else:
+            token_iter = llm.chat_stream(
+                question=body.question,
+                system_state=system_state,
+                incident_context=incident_context,
+                history=history,
+            )
+
+        async for token in token_iter:
             full_response.append(token)
             yield f"data: {json.dumps({'token': token})}\n\n"
 

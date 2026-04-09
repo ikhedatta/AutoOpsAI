@@ -111,18 +111,40 @@ def _tool_instructions_block() -> str:
     """Instructions for when the LLM has access to live infrastructure tools."""
     return (
         "## Tool Usage Rules\n"
-        "You have access to live infrastructure tools. "
+        "You have access to live infrastructure tools AND observability tools "
+        "(Prometheus metrics, Loki logs, Grafana dashboards). "
         "ALWAYS use tools to verify claims — do NOT guess service states.\n\n"
+        "### Infrastructure Tools\n"
         "- Use `list_services` to see all managed services.\n"
         "- Use `get_service_status` FIRST when asked about a specific service.\n"
-        "- Use `get_service_logs` when investigating errors or recent issues.\n"
+        "- Use `get_service_logs` when investigating errors from Docker containers.\n"
         "- Use `get_service_metrics` for performance questions (CPU, memory, I/O).\n"
         "- Use `check_service_health` to verify if a service is responding.\n"
         "- Use `get_active_incidents` to check current open incidents.\n"
-        "- Use `get_incident_history` to check past incidents for a service.\n"
+        "- Use `get_incident_history` to check past incidents for a service.\n\n"
+        "### Observability Tools (Prometheus / Loki / Grafana)\n"
+        "- Use `loki_query_logs` to search for errors, warnings, or recent log activity. "
+        "ALWAYS use this when asked about errors or logs — even if no Docker services are listed. "
+        "Use `loki_get_label_values` with label='container' FIRST to discover which containers have logs, "
+        "then query specific containers.\n"
+        "- **LogQL syntax**: Use `.+` (not `.*`) for regex matching non-empty values. "
+        "Examples: `{container=~\".+\"}` (all containers), "
+        "`{container=\"grafana\"} |~ \"(?i)error\"` (errors in grafana), "
+        "`{container=~\".+\"} |~ \"(?i)error|warn|fatal\"` (errors across all).\n"
+        "- IMPORTANT: `{container=~\".*\"}` is INVALID — always use `.+` to match non-empty container names.\n"
+        "- Use `loki_get_labels` to see available log labels.\n"
+        "- Use `prometheus_query` for instant metric checks. "
+        "Examples: 'up', 'node_memory_MemAvailable_bytes'.\n"
+        "- Use `prometheus_query_range` for trend analysis over time.\n"
+        "- Use `prometheus_get_alerts` to check active Prometheus alerts.\n"
+        "- Use `prometheus_get_targets` to check if scrape targets are healthy.\n"
+        "- Use `grafana_list_dashboards` to find Grafana dashboards.\n"
+        "- Use `grafana_get_datasources` to list configured data sources.\n\n"
+        "### Reasoning\n"
         "- Use `think` to reason through complex questions before answering.\n\n"
-        "Rules:\n"
+        "### Rules\n"
         "- Query real data BEFORE making claims about any service.\n"
+        "- When asked about errors or logs, USE `loki_query_logs` — do not say you lack access.\n"
         "- If a tool returns an error, acknowledge it and work with available data.\n"
         "- Limit to 1–3 tool calls per question — do not over-query.\n"
         "- Synthesise tool results into a clear, concise answer."
@@ -367,11 +389,42 @@ def _build_chat_user_content(
 ) -> str:
     """Build the user content shared by both chat prompt variants."""
     context_parts = ["## Current System State"]
-    for svc, info in system_state.items():
+
+    # Separate observability context from service context
+    obs_info = system_state.get("_observability", {})
+    service_state = {k: v for k, v in system_state.items() if k != "_observability"}
+
+    if service_state:
+        for svc, info in service_state.items():
+            context_parts.append(
+                f"- **{svc}:** {info.get('state', 'unknown')} | "
+                f"CPU {info.get('cpu_percent', '?')}% | "
+                f"Mem {info.get('memory_percent', '?')}%"
+            )
+    else:
         context_parts.append(
-            f"- **{svc}:** {info.get('state', 'unknown')} | "
-            f"CPU {info.get('cpu_percent', '?')}% | "
-            f"Mem {info.get('memory_percent', '?')}%"
+            "- No Docker-managed services discovered (Docker may not be running locally)."
+        )
+
+    if obs_info:
+        context_parts.append("")
+        context_parts.append("## Available Observability Sources")
+        if obs_info.get("loki") == "available":
+            containers = obs_info.get("loki_containers", [])
+            if containers:
+                context_parts.append(
+                    f"- **Loki** (log aggregation): available — containers with logs: "
+                    f"{', '.join(containers)}"
+                )
+            else:
+                context_parts.append("- **Loki** (log aggregation): available")
+        if obs_info.get("prometheus") == "available":
+            context_parts.append("- **Prometheus** (metrics): available")
+        if obs_info.get("grafana") == "available":
+            context_parts.append("- **Grafana** (dashboards): available")
+        context_parts.append(
+            "\nUse observability tools (loki_query_logs, prometheus_query, etc.) "
+            "to answer questions about logs, metrics, and system health."
         )
 
     if incident_context:

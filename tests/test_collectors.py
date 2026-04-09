@@ -1,4 +1,4 @@
-"""Tests for agent.collector — Prometheus client, Loki client, collector loop."""
+"""Tests for agent.collector — Prometheus client, Loki client, Grafana client, collector loop."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 
 from agent.collector.prometheus_client import PrometheusClient
 from agent.collector.loki_client import LokiClient
+from agent.collector.grafana_client import GrafanaClient
 from agent.models import LogEntry
 
 
@@ -23,7 +24,7 @@ class TestPrometheusClient:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"data": {"result": [{"metric": {"__name__": "up"}, "value": [1, "1"]}]}}
+        mock_resp.json.return_value = {"status": "success", "data": {"result": [{"metric": {"__name__": "up"}, "value": [1, "1"]}]}}
 
         with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
             result = await client.query("up")
@@ -42,10 +43,10 @@ class TestPrometheusClient:
         client = PrometheusClient("http://localhost:9090")
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"data": {"result": []}}
+        mock_resp.json.return_value = {"status": "success", "data": {"result": []}}
 
         with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
-            result = await client.query_range("up", "now-1h", "now")
+            result = await client.query_range("up", duration_minutes=30)
             assert result == []
 
     @pytest.mark.asyncio
@@ -120,6 +121,172 @@ class TestLokiClient:
         client = LokiClient("http://localhost:3100")
         with patch.object(client._http, "get", new_callable=AsyncMock, side_effect=Exception("down")):
             assert await client.is_available() is False
+
+
+# ---------------------------------------------------------------------------
+# PrometheusClient — new methods
+# ---------------------------------------------------------------------------
+
+
+class TestPrometheusClientExtended:
+    @pytest.mark.asyncio
+    async def test_get_targets(self):
+        client = PrometheusClient("http://localhost:9090")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "status": "success",
+            "data": {
+                "activeTargets": [
+                    {"labels": {"job": "node", "instance": "localhost:9100"}, "health": "up",
+                     "lastScrape": "2026-04-08T09:00:00Z", "lastError": ""},
+                ]
+            },
+        }
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            targets = await client.get_targets()
+            assert len(targets) == 1
+            assert targets[0]["job"] == "node"
+            assert targets[0]["health"] == "up"
+
+    @pytest.mark.asyncio
+    async def test_get_alerts_empty(self):
+        client = PrometheusClient("http://localhost:9090")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"status": "success", "data": {"alerts": []}}
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            alerts = await client.get_alerts()
+            assert alerts == []
+
+    @pytest.mark.asyncio
+    async def test_get_metric_names(self):
+        client = PrometheusClient("http://localhost:9090")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"status": "success", "data": ["up", "node_cpu_seconds_total"]}
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            names = await client.get_metric_names()
+            assert "up" in names
+
+
+# ---------------------------------------------------------------------------
+# LokiClient — new methods
+# ---------------------------------------------------------------------------
+
+
+class TestLokiClientExtended:
+    @pytest.mark.asyncio
+    async def test_get_labels(self):
+        client = LokiClient("http://localhost:3100")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"data": ["container", "job", "host"]}
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            labels = await client.get_labels()
+            assert "container" in labels
+
+    @pytest.mark.asyncio
+    async def test_get_label_values(self):
+        client = LokiClient("http://localhost:3100")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"data": ["grafana", "loki", "prometheus"]}
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            values = await client.get_label_values("container")
+            assert "grafana" in values
+
+    @pytest.mark.asyncio
+    async def test_query_raw(self):
+        client = LokiClient("http://localhost:3100")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "data": {"result": [{"stream": {"container": "nginx"}, "values": [["123", "line1"]]}]}
+        }
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            streams = await client.query_raw('{container="nginx"}')
+            assert len(streams) == 1
+
+
+# ---------------------------------------------------------------------------
+# GrafanaClient
+# ---------------------------------------------------------------------------
+
+
+class TestGrafanaClient:
+    @pytest.mark.asyncio
+    async def test_is_available_true(self):
+        client = GrafanaClient("http://localhost:3000")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            assert await client.is_available() is True
+
+    @pytest.mark.asyncio
+    async def test_is_available_false(self):
+        client = GrafanaClient("http://localhost:3000")
+        with patch.object(client._http, "get", new_callable=AsyncMock, side_effect=Exception("down")):
+            assert await client.is_available() is False
+
+    @pytest.mark.asyncio
+    async def test_list_dashboards(self):
+        client = GrafanaClient("http://localhost:3000")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"uid": "abc", "title": "My Dashboard", "url": "/d/abc/my-dashboard", "tags": ["test"]},
+        ]
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            dashboards = await client.list_dashboards()
+            assert len(dashboards) == 1
+            assert dashboards[0]["uid"] == "abc"
+
+    @pytest.mark.asyncio
+    async def test_get_dashboard(self):
+        client = GrafanaClient("http://localhost:3000")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "dashboard": {
+                "uid": "abc",
+                "title": "My Dashboard",
+                "tags": [],
+                "panels": [
+                    {"id": 1, "title": "CPU", "type": "timeseries", "targets": [{"expr": "node_cpu_seconds_total"}]},
+                ],
+            }
+        }
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            result = await client.get_dashboard("abc")
+            assert result is not None
+            assert result["uid"] == "abc"
+            assert len(result["panels"]) == 1
+            assert result["panels"][0]["queries"] == ["node_cpu_seconds_total"]
+
+    @pytest.mark.asyncio
+    async def test_get_datasources(self):
+        client = GrafanaClient("http://localhost:3000")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"name": "Prometheus", "type": "prometheus", "url": "http://prom:9090", "isDefault": True},
+        ]
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            sources = await client.get_datasources()
+            assert len(sources) == 1
+            assert sources[0]["name"] == "Prometheus"
+            assert sources[0]["is_default"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_annotations_empty(self):
+        client = GrafanaClient("http://localhost:3000")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = []
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp):
+            annotations = await client.get_annotations()
+            assert annotations == []
 
 
 # ---------------------------------------------------------------------------

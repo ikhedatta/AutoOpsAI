@@ -44,18 +44,25 @@ if /i "!LLM_PROVIDER!"=="github" (
     echo Checking GitHub Models API...
     for /f "tokens=1,2 delims==" %%a in ('findstr /i "^GITHUB_MODELS_ENDPOINT=" .env 2^>nul') do set "GH_ENDPOINT=%%b"
     if not defined GH_ENDPOINT set "GH_ENDPOINT=https://models.inference.ai.azure.com"
-    curl -sf "!GH_ENDPOINT!" >nul 2>&1
+    for /f "tokens=1,2 delims==" %%a in ('findstr /i "^GITHUB_TOKEN=" .env 2^>nul') do set "GH_TOKEN=%%b"
+    curl --ssl-no-revoke -sf -o nul -w "%%{http_code}" -H "Authorization: Bearer !GH_TOKEN!" "!GH_ENDPOINT!/info" >nul 2>&1
     if !errorlevel! equ 0 (
         echo   [OK] GitHub Models API reachable
     ) else (
-        echo   [!] GitHub Models API not reachable ^(LLM features may be unavailable^)
+        REM Fallback: just check network connectivity without -f
+        curl --ssl-no-revoke -s -o nul --connect-timeout 5 "!GH_ENDPOINT!" >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo   [OK] GitHub Models API reachable ^(endpoint responds^)
+        ) else (
+            echo   [!] GitHub Models API not reachable ^(LLM features may be unavailable^)
+        )
     )
 ) else (
     echo Checking Ollama...
     for /f "tokens=1,2 delims==" %%a in ('findstr /i "^OLLAMA_HOST=" .env 2^>nul') do set "OLLAMA_URL=%%b"
     if not defined OLLAMA_URL set "OLLAMA_URL=http://localhost:11434"
     for /f "tokens=1" %%u in ("!OLLAMA_URL!") do set "OLLAMA_URL=%%u"
-    curl -sf "!OLLAMA_URL!/api/tags" >nul 2>&1
+    curl --ssl-no-revoke -sf "!OLLAMA_URL!/api/tags" >nul 2>&1
     if !errorlevel! equ 0 (
         echo   [OK] Ollama running
     ) else (
@@ -112,7 +119,7 @@ echo Waiting for server...
 set READY=0
 for /l %%i in (1,1,60) do (
     if !READY! equ 0 (
-        curl -sf "http://%HOST%:%PORT%/api/v1/health" >nul 2>&1
+        curl --ssl-no-revoke -sf "http://%HOST%:%PORT%/api/v1/health" >nul 2>&1
         if !errorlevel! equ 0 (
             set READY=1
         ) else (

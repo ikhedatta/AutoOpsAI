@@ -285,23 +285,10 @@ class GitHubLLMClient:
         )
         resp.raise_for_status()
         msg = resp.json()["choices"][0]["message"]
-        # Normalise to dict matching Ollama format
-        result: dict[str, Any] = {"content": msg.get("content", "") or ""}
-        if msg.get("tool_calls"):
-            result["tool_calls"] = [
-                {
-                    "function": {
-                        "name": tc["function"]["name"],
-                        "arguments": (
-                            json.loads(tc["function"]["arguments"])
-                            if isinstance(tc["function"]["arguments"], str)
-                            else tc["function"]["arguments"]
-                        ),
-                    }
-                }
-                for tc in msg["tool_calls"]
-            ]
-        return result
+        # Keep the raw message format for OpenAI API compatibility.
+        # The assistant message with tool_calls must include the tool_call ids,
+        # and tool role responses must reference them via tool_call_id.
+        return msg
 
     async def chat_with_tools(
         self,
@@ -327,31 +314,41 @@ class GitHubLLMClient:
 
                 tool_calls = msg.get("tool_calls")
                 if not tool_calls:
-                    return msg.get("content", "")
+                    return msg.get("content", "") or ""
 
+                # Add the full assistant message (with tool_calls including ids)
                 messages.append(msg)
 
+                # Parse and execute tool calls
                 parsed_calls = []
                 for tc in tool_calls:
-                    func = tc.get("function", tc)
-                    parsed_calls.append((
-                        func.get("name", "unknown"),
-                        func.get("arguments", {}),
-                    ))
+                    func = tc.get("function", {})
+                    tool_call_id = tc.get("id", "")
+                    name = func.get("name", "unknown")
+                    # Arguments may be a JSON string (OpenAI format) or dict (Ollama)
+                    args = func.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    parsed_calls.append((tool_call_id, name, args))
 
                 results = await asyncio.gather(
-                    *(tool_executor.execute(name, args) for name, args in parsed_calls)
+                    *(tool_executor.execute(name, args) for _, name, args in parsed_calls)
                 )
 
-                for (tool_name, tool_args), result in zip(parsed_calls, results):
+                for (tool_call_id, tool_name, tool_args), result in zip(parsed_calls, results):
                     logger.info(
                         "Tool call [iter=%d]: %s(%s) → success=%s",
                         iteration, tool_name,
                         json.dumps(tool_args, default=str)[:100],
                         result.success,
                     )
+                    # OpenAI API requires tool_call_id in tool responses
                     messages.append({
                         "role": "tool",
+                        "tool_call_id": tool_call_id,
                         "content": result.to_json(),
                     })
 
@@ -370,3 +367,112 @@ class GitHubLLMClient:
                 return await self.chat(question, system_state, incident_context)
             except Exception:
                 return _friendly_error_message(exc)
+
+    # -- streaming tool-augmented chat --------------------------------------
+
+    async def _run_tool_loop(
+        self,
+        messages: list[dict],
+        tool_schemas: list[dict],
+        tool_executor: Any,
+        max_iterations: int,
+    ) -> str | None:
+        """Execute the tool-calling loop, mutating *messages* in place.
+
+        Returns:
+            ``None``  — tools were called; *messages* now contains tool
+                        results and is ready for a final streaming call.
+            ``str``   — the LLM answered directly (no tools used);
+                        the string is the final content.
+        """
+        for iteration in range(max_iterations):
+            msg = await asyncio.to_thread(
+                self._chat_with_tools_sync, messages, tool_schemas,
+            )
+
+            tool_calls = msg.get("tool_calls")
+            if not tool_calls:
+                # LLM produced a final text answer
+                return msg.get("content", "") or ""
+
+            messages.append(msg)
+
+            parsed_calls = []
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                tool_call_id = tc.get("id", "")
+                name = func.get("name", "unknown")
+                args = func.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                parsed_calls.append((tool_call_id, name, args))
+
+            results = await asyncio.gather(
+                *(tool_executor.execute(name, args) for _, name, args in parsed_calls)
+            )
+
+            for (tool_call_id, tool_name, tool_args), result in zip(parsed_calls, results):
+                logger.info(
+                    "Tool call [iter=%d]: %s(%s) → success=%s",
+                    iteration, tool_name,
+                    json.dumps(tool_args, default=str)[:100],
+                    result.success,
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": result.to_json(),
+                })
+
+        # Exhausted iterations — messages has tool results, ready for final call
+        return None
+
+    async def chat_stream_with_tools(
+        self,
+        question: str,
+        system_state: dict[str, Any],
+        incident_context: dict[str, Any] | None = None,
+        *,
+        tool_executor: Any = None,
+        max_iterations: int = 5,
+        history: list[dict[str, str]] | None = None,
+    ) -> AsyncIterator[str]:
+        """Tool-augmented chat with the final answer streamed token-by-token.
+
+        1. Runs the tool loop (non-streamed) so tools get called.
+        2. Streams the final LLM response that incorporates tool results.
+        Falls back to plain streaming on any error.
+        """
+        if tool_executor is None:
+            async for token in self.chat_stream(question, system_state, incident_context, history):
+                yield token
+            return
+
+        messages = chat_prompt_with_tools(question, system_state, incident_context, history)
+        tool_schemas = get_ollama_tool_schemas()
+
+        try:
+            direct_answer = await self._run_tool_loop(
+                messages, tool_schemas, tool_executor, max_iterations,
+            )
+            if direct_answer is not None:
+                # LLM answered without needing to stream (e.g. tools
+                # returned results and LLM synthesised in a non-streaming
+                # call, or LLM answered directly without tools).
+                yield direct_answer
+                return
+
+            # Tools were called — messages now has tool results.
+            # Stream the final synthesised answer.
+            async for token in self._chat_stream(messages):
+                yield token
+
+        except Exception:
+            logger.warning("Streaming tool chat failed, falling back to plain stream", exc_info=True)
+            async for token in self._chat_stream(
+                chat_prompt(question, system_state, incident_context, history)
+            ):
+                yield token

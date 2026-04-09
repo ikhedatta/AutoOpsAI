@@ -102,7 +102,33 @@ async def lifespan(application: FastAPI):
     )
     app_state["approval_router"] = approval_router
 
-    # 8. Remediation executor
+    # 8. Observability clients (Prometheus, Loki, Grafana)
+    from agent.collector.prometheus_client import PrometheusClient
+    from agent.collector.loki_client import LokiClient
+    from agent.collector.grafana_client import GrafanaClient
+
+    prometheus_client = PrometheusClient(base_url=settings.prometheus_url)
+    loki_client = LokiClient(base_url=settings.loki_url)
+    grafana_client = GrafanaClient(
+        base_url=settings.grafana_url,
+        username=settings.grafana_user,
+        password=settings.grafana_password,
+    )
+    app_state["prometheus"] = prometheus_client
+    app_state["loki"] = loki_client
+    app_state["grafana"] = grafana_client
+
+    prom_ok = await prometheus_client.is_available()
+    loki_ok = await loki_client.is_available()
+    grafana_ok = await grafana_client.is_available()
+    logger.info(
+        "Observability: prometheus=%s loki=%s grafana=%s",
+        "ok" if prom_ok else "unavailable",
+        "ok" if loki_ok else "unavailable",
+        "ok" if grafana_ok else "unavailable",
+    )
+
+    # 9. Remediation executor
     from agent.remediation.executor import RemediationExecutor
     executor = None
     if provider:
@@ -121,11 +147,16 @@ async def lifespan(application: FastAPI):
 
     approval_router.set_on_approved(on_approved)
 
-    # 9. Collector
+    # 10. Collector (with observability clients)
     from agent.collector.collector import MetricsCollector
     collector = None
     if provider:
-        collector = MetricsCollector(settings, provider, engine)
+        collector = MetricsCollector(
+            settings, provider, engine,
+            prometheus=prometheus_client,
+            loki=loki_client,
+            grafana=grafana_client,
+        )
         app_state["collector"] = collector
         app_state["collector_running"] = False
 
@@ -181,6 +212,7 @@ from agent.api.routes_approval import router as approval_router  # noqa: E402
 from agent.api.routes_playbooks import router as playbooks_router  # noqa: E402
 from agent.api.routes_agent import router as agent_router  # noqa: E402
 from agent.api.routes_chat import router as chat_router  # noqa: E402
+from agent.api.routes_observability import router as observability_router  # noqa: E402
 
 app.include_router(system_router, prefix="/api/v1")
 app.include_router(incidents_router, prefix="/api/v1")
@@ -188,6 +220,7 @@ app.include_router(approval_router, prefix="/api/v1")
 app.include_router(playbooks_router, prefix="/api/v1")
 app.include_router(agent_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
+app.include_router(observability_router, prefix="/api/v1")
 
 
 # ---------------------------------------------------------------------------

@@ -139,9 +139,15 @@ class ToolExecutor:
         self,
         provider: Any = None,
         incident_store: Any = None,
+        prometheus: Any = None,
+        loki: Any = None,
+        grafana: Any = None,
     ):
         self._provider = provider
         self._incident_store = incident_store
+        self._prometheus = prometheus
+        self._loki = loki
+        self._grafana = grafana
 
     async def execute(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
         """Execute a tool call. Returns structured ToolResult (never raises)."""
@@ -243,6 +249,44 @@ class ToolExecutor:
             return await self._get_incident_history(
                 args["service_name"], args.get("limit", 5),
             )
+
+        # Prometheus tools
+        if tool_name == "prometheus_query":
+            return await self._prometheus_query(args["promql"])
+
+        if tool_name == "prometheus_query_range":
+            return await self._prometheus_query_range(
+                args["promql"],
+                args.get("duration_minutes", 30),
+                args.get("step", "60s"),
+            )
+
+        if tool_name == "prometheus_get_alerts":
+            return await self._prometheus_get_alerts()
+
+        if tool_name == "prometheus_get_targets":
+            return await self._prometheus_get_targets()
+
+        # Loki tools
+        if tool_name == "loki_query_logs":
+            return await self._loki_query_logs(
+                args["logql"],
+                args.get("limit", 50),
+                args.get("duration_minutes", 60),
+            )
+
+        if tool_name == "loki_get_labels":
+            return await self._loki_get_labels()
+
+        if tool_name == "loki_get_label_values":
+            return await self._loki_get_label_values(args["label"])
+
+        # Grafana tools
+        if tool_name == "grafana_list_dashboards":
+            return await self._grafana_list_dashboards(args.get("query"))
+
+        if tool_name == "grafana_get_datasources":
+            return await self._grafana_get_datasources()
 
         return {"error": f"No handler for tool: {tool_name}"}
 
@@ -350,3 +394,88 @@ class ToolExecutor:
             ]
         except Exception as e:
             return [{"error": f"Could not fetch incident history: {e}"}]
+
+    # ── Prometheus-backed tools ────────────────────────────────────────────
+
+    async def _prometheus_query(self, promql: str) -> dict:
+        if not self._prometheus:
+            return {"error": "Prometheus client not configured"}
+        result = await self._prometheus.query(promql)
+        return {"query": promql, "result_count": len(result), "result": result}
+
+    async def _prometheus_query_range(
+        self, promql: str, duration_minutes: int, step: str,
+    ) -> dict:
+        if not self._prometheus:
+            return {"error": "Prometheus client not configured"}
+        result = await self._prometheus.query_range(
+            promql, duration_minutes=duration_minutes, step=step,
+        )
+        return {
+            "query": promql,
+            "duration_minutes": duration_minutes,
+            "result_count": len(result),
+            "result": result,
+        }
+
+    async def _prometheus_get_alerts(self) -> dict:
+        if not self._prometheus:
+            return {"error": "Prometheus client not configured"}
+        alerts = await self._prometheus.get_alerts()
+        return {"alert_count": len(alerts), "alerts": alerts}
+
+    async def _prometheus_get_targets(self) -> dict:
+        if not self._prometheus:
+            return {"error": "Prometheus client not configured"}
+        targets = await self._prometheus.get_targets()
+        return {"target_count": len(targets), "targets": targets}
+
+    # ── Loki-backed tools ──────────────────────────────────────────────────
+
+    async def _loki_query_logs(
+        self, logql: str, limit: int, duration_minutes: int,
+    ) -> dict:
+        if not self._loki:
+            return {"error": "Loki client not configured"}
+        entries = await self._loki.query(
+            logql, limit=limit, duration_minutes=duration_minutes,
+        )
+        return {
+            "query": logql,
+            "log_count": len(entries),
+            "logs": [
+                {
+                    "timestamp": str(e.timestamp) if e.timestamp else None,
+                    "source": e.source,
+                    "level": e.level,
+                    "message": e.message[:500],  # cap per-line length for LLM context
+                }
+                for e in entries
+            ],
+        }
+
+    async def _loki_get_labels(self) -> dict:
+        if not self._loki:
+            return {"error": "Loki client not configured"}
+        labels = await self._loki.get_labels()
+        return {"labels": labels}
+
+    async def _loki_get_label_values(self, label: str) -> dict:
+        if not self._loki:
+            return {"error": "Loki client not configured"}
+        values = await self._loki.get_label_values(label)
+        return {"label": label, "values": values}
+
+    # ── Grafana-backed tools ───────────────────────────────────────────────
+
+    async def _grafana_list_dashboards(self, query: str | None = None) -> dict:
+        if not self._grafana:
+            return {"error": "Grafana client not configured"}
+        dashboards = await self._grafana.list_dashboards(query)
+        return {"dashboard_count": len(dashboards), "dashboards": dashboards}
+
+    async def _grafana_get_datasources(self) -> dict:
+        if not self._grafana:
+            return {"error": "Grafana client not configured"}
+        sources = await self._grafana.get_datasources()
+        return {"datasource_count": len(sources), "datasources": sources}

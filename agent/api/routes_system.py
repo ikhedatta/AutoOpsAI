@@ -13,12 +13,18 @@ router = APIRouter(tags=["system"])
 @router.get("/health")
 async def health():
     from agent.main import app_state
+    prom = app_state.get("prometheus")
+    loki = app_state.get("loki")
+    grafana = app_state.get("grafana")
     components = {
         "database": await db.health_check(),
         "collector": app_state.get("collector_running", False),
         "provider": app_state.get("provider_type", "unknown"),
         "ollama": app_state.get("ollama_available", False),
         "websocket_clients": app_state.get("ws_clients", 0),
+        "prometheus": await prom.is_available() if prom else False,
+        "loki": await loki.is_available() if loki else False,
+        "grafana": await grafana.is_available() if grafana else False,
     }
     all_healthy = components["database"]
     return {

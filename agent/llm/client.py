@@ -371,3 +371,75 @@ class LLMClient:
                 return await self.chat(question, system_state, incident_context)
             except Exception:
                 return _friendly_error_message(exc)
+
+    async def chat_stream_with_tools(
+        self,
+        question: str,
+        system_state: dict[str, Any],
+        incident_context: dict[str, Any] | None = None,
+        *,
+        tool_executor: Any = None,
+        max_iterations: int = 5,
+        history: list[dict[str, str]] | None = None,
+    ) -> AsyncIterator[str]:
+        """Tool-augmented streaming chat for Ollama.
+
+        Runs the tool loop synchronously, then streams the final answer.
+        """
+        if tool_executor is None:
+            async for token in self.chat_stream(question, system_state, incident_context, history):
+                yield token
+            return
+
+        messages = chat_prompt_with_tools(question, system_state, incident_context, history)
+        tool_schemas = get_ollama_tool_schemas()
+
+        try:
+            for iteration in range(max_iterations):
+                msg = await asyncio.to_thread(
+                    self._chat_with_tools_sync, messages, tool_schemas,
+                )
+
+                tool_calls = msg.get("tool_calls")
+                if not tool_calls:
+                    content = msg.get("content", "")
+                    if content:
+                        yield content
+                    return
+
+                messages.append(msg)
+
+                parsed_calls = []
+                for tc in tool_calls:
+                    func = tc.get("function", tc)
+                    parsed_calls.append((
+                        func.get("name", "unknown"),
+                        func.get("arguments", {}),
+                    ))
+
+                results = await asyncio.gather(
+                    *(tool_executor.execute(name, args) for name, args in parsed_calls)
+                )
+
+                for (tool_name, tool_args), result in zip(parsed_calls, results):
+                    logger.info(
+                        "Tool call [iter=%d]: %s(%s) → success=%s",
+                        iteration, tool_name,
+                        json.dumps(tool_args, default=str)[:100],
+                        result.success,
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "content": result.to_json(),
+                    })
+
+            # Stream the final answer
+            async for token in self._chat_stream(messages):
+                yield token
+
+        except Exception:
+            logger.warning("Streaming tool chat failed, falling back to plain stream", exc_info=True)
+            async for token in self._chat_stream(
+                chat_prompt(question, system_state, incident_context, history)
+            ):
+                yield token
