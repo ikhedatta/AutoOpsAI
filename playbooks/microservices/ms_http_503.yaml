@@ -1,0 +1,60 @@
+id: ms_http_503
+name: "MS HTTP 503 Service Unavailable"
+severity: HIGH
+tags: ["http", "503", "microservice", "availability"]
+cooldown_seconds: 120
+provider: docker_compose
+
+detection:
+  type: log_pattern
+  conditions:
+    - type: log_pattern
+      pattern: "HTTP 503|Service Unavailable|503 Service"
+      service_name: "{any}"
+
+diagnosis: >
+  One or more microservices are returning HTTP 503 Service Unavailable.
+  This typically means the service is overloaded, starting up, shutting down,
+  or a dependency (database, cache, downstream service) is unreachable.
+  Common causes: resource exhaustion, connection pool saturation, or cascading failures
+  from another service being down.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 100
+
+    - action: exec_command
+      target: "{service_name}"
+      command: "grep -i 'unavailable\\|timeout\\|connection refused\\|503' /app/logs/*.log 2>/dev/null | tail -50"
+      timeout: 10
+
+    - action: health_check
+      target: "{service_name}"
+      timeout: 10
+
+    - action: restart_service
+      target: "{service_name}"
+      timeout: 45
+
+    - action: wait
+      seconds: 15
+
+    - action: health_check
+      target: "{service_name}"
+      timeout: 20
+
+rollback:
+  description: "If service remains unavailable after restart"
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 200
+    - action: escalate
+      message: "HTTP 503 Service Unavailable persists after restart. Possible dependency failure or resource exhaustion. Manual intervention required."
+
+metadata:
+  alert_name: "MS 503 Service Unavailable"
+  grafana_folder: "Server-Alerts"
+  runbook_url: "https://wiki.example.com/runbooks/http-503"

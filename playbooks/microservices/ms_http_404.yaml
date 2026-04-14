@@ -1,0 +1,49 @@
+id: ms_http_404
+name: "MS HTTP 404 Not Found"
+severity: MEDIUM
+tags: ["http", "404", "microservice", "routing"]
+cooldown_seconds: 300
+provider: docker_compose
+
+detection:
+  type: log_pattern
+  conditions:
+    - type: log_pattern
+      pattern: "HTTP 404|Not Found|404 Not"
+      service_name: "{any}"
+
+diagnosis: >
+  Microservices are generating a high volume of HTTP 404 Not Found responses.
+  A sustained spike in 404s (as opposed to isolated occurrences) indicates a
+  routing misconfiguration, a broken client sending requests to wrong endpoints,
+  a recently removed API path, or a misconfigured reverse proxy/gateway.
+  Check recent deployments and API version changes.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 100
+
+    - action: exec_command
+      target: "{service_name}"
+      command: "grep -i '404\\|not found\\|no route' /app/logs/*.log 2>/dev/null | tail -50"
+      timeout: 10
+
+    - action: health_check
+      target: "{service_name}"
+      timeout: 10
+
+    - action: escalate
+      message: "High 404 rate detected. This is likely a routing or client configuration issue, not a service crash. Manual review of recent deployments and API changes recommended."
+
+rollback:
+  description: "If 404 spike is caused by a bad deployment"
+  steps:
+    - action: escalate
+      message: "Sustained 404 errors suggest routing misconfiguration. Check recent deployments and gateway config."
+
+metadata:
+  alert_name: "MS 404 Not Found"
+  grafana_folder: "Server-Alerts"
+  runbook_url: "https://wiki.example.com/runbooks/http-404"

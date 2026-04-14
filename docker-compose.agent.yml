@@ -9,15 +9,15 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MONGODB_URL=${MONGODB_URL:-mongodb://localhost:27017/autoops}
+      - MONGODB_URL=${MONGODB_URL:-mongodb://admin:admin123@10.41.31.20:8000/autoopsai?authSource=admin}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3:8b}
       - PROVIDER_TYPE=docker_compose
       - COMPOSE_PROJECT_NAME=autoops-demo
       - COMPOSE_FILE=/app/infra/docker-compose.target.yml
       - POLLING_INTERVAL_SECONDS=${POLLING_INTERVAL_SECONDS:-15}
-      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
-      - LOKI_URL=${LOKI_URL:-http://loki:3100}
+      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://10.41.31.20:9090}
+      - LOKI_URL=${LOKI_URL:-http://10.41.31.20:3100}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./playbooks:/app/playbooks:ro

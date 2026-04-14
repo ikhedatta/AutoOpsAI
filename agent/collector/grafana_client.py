@@ -34,6 +34,7 @@ class GrafanaClient:
             timeout=timeout,
             auth=self._auth,
             headers={"Content-Type": "application/json"},
+            verify=False,
         )
 
     # ------------------------------------------------------------------

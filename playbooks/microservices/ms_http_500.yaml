@@ -1,0 +1,59 @@
+id: ms_http_500
+name: "MS HTTP 500 Internal Server Error"
+severity: HIGH
+tags: ["http", "500", "microservice", "error"]
+cooldown_seconds: 120
+provider: docker_compose
+
+detection:
+  type: log_pattern
+  conditions:
+    - type: log_pattern
+      pattern: "HTTP 500|Internal Server Error|500 Internal"
+      service_name: "{any}"
+
+diagnosis: >
+  One or more microservices are returning HTTP 500 Internal Server Error responses.
+  This indicates an unhandled exception or critical failure in the application code.
+  Common causes: uncaught exceptions, database connection failures, null pointer errors,
+  or downstream service failures. Check application logs for stack traces.
+
+remediation:
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 100
+
+    - action: exec_command
+      target: "{service_name}"
+      command: "grep -i 'error\\|exception\\|traceback\\|500' /app/logs/*.log 2>/dev/null | tail -50"
+      timeout: 10
+
+    - action: health_check
+      target: "{service_name}"
+      timeout: 10
+
+    - action: restart_service
+      target: "{service_name}"
+      timeout: 30
+
+    - action: wait
+      seconds: 10
+
+    - action: health_check
+      target: "{service_name}"
+      timeout: 15
+
+rollback:
+  description: "If restart does not resolve HTTP 500 errors"
+  steps:
+    - action: collect_logs
+      target: "{service_name}"
+      lines: 200
+    - action: escalate
+      message: "HTTP 500 errors persist after restart. Application-level bug investigation required. Logs attached."
+
+metadata:
+  alert_name: "MS 500 Internal Server Error"
+  grafana_folder: "Server-Alerts"
+  runbook_url: "https://wiki.example.com/runbooks/http-500"

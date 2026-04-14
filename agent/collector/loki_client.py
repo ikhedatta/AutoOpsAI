@@ -23,7 +23,7 @@ class LokiClient:
 
     def __init__(self, base_url: str = "http://localhost:3100", timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
-        self._http = httpx.AsyncClient(timeout=timeout)
+        self._http = httpx.AsyncClient(timeout=timeout, verify=False)
 
     # ------------------------------------------------------------------
     # Log queries

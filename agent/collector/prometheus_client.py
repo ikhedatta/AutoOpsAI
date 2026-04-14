@@ -21,7 +21,7 @@ class PrometheusClient:
 
     def __init__(self, base_url: str = "http://localhost:9090", timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
-        self._http = httpx.AsyncClient(timeout=timeout)
+        self._http = httpx.AsyncClient(timeout=timeout, verify=False)
 
     # ------------------------------------------------------------------
     # Instant query

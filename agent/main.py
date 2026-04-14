@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -171,6 +171,46 @@ async def lifespan(application: FastAPI):
         app_state["collector_running"] = False
         logger.info("Collector skipped — no provider available")
 
+    # 11. Teams Bot (optional)
+    if settings.teams_bot_enabled and settings.teams_app_id and settings.teams_app_secret:
+        from agent.teams.bot import AutoOpsTeamsBot
+        from agent.store.models import ApprovalDoc
+        teams_bot = AutoOpsTeamsBot(settings, app_state)
+
+        # Wire approval events to also push to Teams
+        original_on_event = approval_router._on_event
+
+        async def _on_event_with_teams(event_type: str, data: dict) -> None:
+            # Still broadcast to WebSocket dashboard
+            if original_on_event:
+                await original_on_event(event_type, data)
+            # Also push to Teams
+            try:
+                if event_type == "approval_requested":
+                    inc_id = data.get("incident_id", "")
+                    inc = await incident_store.get_incident(inc_id)
+                    if inc:
+                        appr = await ApprovalDoc.find_one({"incident_id": inc_id, "decision": None})
+                        from agent.teams.cards import build_approval_card as build_teams_approval
+                        card = build_teams_approval(inc, appr)
+                        await teams_bot.send_proactive_card(card)
+                elif event_type in ("incident_resolved", "incident_failed"):
+                    inc_id = data.get("incident_id", "")
+                    inc = await incident_store.get_incident(inc_id)
+                    if inc:
+                        from agent.teams.cards import build_resolution_card
+                        card = build_resolution_card(inc)
+                        await teams_bot.send_proactive_card(card)
+            except Exception:
+                logger.warning("Failed to push event %s to Teams", event_type, exc_info=True)
+
+        approval_router.set_on_event(_on_event_with_teams)
+        app_state["teams_bot"] = teams_bot
+        logger.info("Teams bot enabled (app_id=%s)", settings.teams_app_id[:8] + "...")
+    else:
+        app_state["teams_bot"] = None
+        logger.info("Teams bot disabled (set TEAMS_BOT_ENABLED=true to enable)")
+
     logger.info("=== AutoOps AI agent ready ===")
 
     yield  # App is running
@@ -213,6 +253,7 @@ from agent.api.routes_playbooks import router as playbooks_router  # noqa: E402
 from agent.api.routes_agent import router as agent_router  # noqa: E402
 from agent.api.routes_chat import router as chat_router  # noqa: E402
 from agent.api.routes_observability import router as observability_router  # noqa: E402
+from agent.api.routes_webhook import router as webhook_router  # noqa: E402  # noqa: E402
 
 app.include_router(system_router, prefix="/api/v1")
 app.include_router(incidents_router, prefix="/api/v1")
@@ -221,6 +262,29 @@ app.include_router(playbooks_router, prefix="/api/v1")
 app.include_router(agent_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(observability_router, prefix="/api/v1")
+app.include_router(webhook_router, prefix="/api/v1")
+
+
+# ---------------------------------------------------------------------------
+# Teams Bot Framework endpoint
+# ---------------------------------------------------------------------------
+
+@app.post("/api/messages")
+async def teams_messages(request: Request):
+    """Bot Framework messaging endpoint — receives activities from Teams."""
+    bot = app_state.get("teams_bot")
+    if not bot:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Teams bot not enabled"}, status_code=501)
+
+    body = await request.json()
+    auth_header = request.headers.get("Authorization", "")
+    response = await bot.process_activity(body, auth_header)
+
+    if response:
+        return JSONResponse(data=response.body, status_code=response.status)
+    from fastapi.responses import Response
+    return Response(status_code=200)
 
 
 # ---------------------------------------------------------------------------

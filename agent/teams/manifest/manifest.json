@@ -1,0 +1,70 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "2e0f490b-1578-4b7d-be00-3f8c46d700f9",
+  "developer": {
+    "name": "Emerson AutoOps",
+    "websiteUrl": "https://autoops.emerson.com",
+    "privacyUrl": "https://autoops.emerson.com/privacy",
+    "termsOfUseUrl": "https://autoops.emerson.com/terms"
+  },
+  "name": {
+    "short": "AutoOps AI",
+    "full": "AutoOps AI - Intelligent Operations Assistant"
+  },
+  "description": {
+    "short": "AI-powered incident detection, diagnosis, and remediation",
+    "full": "AutoOps AI monitors your infrastructure, detects anomalies, diagnoses root causes using AI, and orchestrates remediation with human-in-the-loop approval. Get real-time incident alerts, approve or deny remediations, and query system status — all from Microsoft Teams."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#4F46E5",
+  "bots": [
+    {
+      "botId": "2e0f490b-1578-4b7d-be00-3f8c46d700f9",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupChat"],
+          "commands": [
+            {
+              "title": "status",
+              "description": "Show current agent and infrastructure status"
+            },
+            {
+              "title": "incidents",
+              "description": "List active incidents"
+            },
+            {
+              "title": "incident",
+              "description": "Get details for a specific incident (e.g. incident INC-42)"
+            },
+            {
+              "title": "approve",
+              "description": "Approve a pending remediation (e.g. approve INC-42)"
+            },
+            {
+              "title": "deny",
+              "description": "Deny a pending remediation (e.g. deny INC-42)"
+            },
+            {
+              "title": "help",
+              "description": "Show available commands and usage"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": [],
+  "defaultInstallScope": "team",
+  "defaultGroupCapability": {
+    "team": "bot"
+  }
+}

@@ -4,13 +4,17 @@ Incident endpoints — list, detail, escalate.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent.api.dependencies import verify_api_key
 from agent.models import IncidentStatus
+from agent.notifications.email_service import send_escalation_email
 from agent.store import incidents as incident_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -63,7 +67,19 @@ async def escalate_incident(incident_id: str):
         resource_id=incident_id,
         detail="Manual escalation",
     )
-    return {"status": "escalated", "incident_id": incident_id}
+
+    # Send escalation email notification
+    email_sent = await send_escalation_email(
+        incident_id=incident_id,
+        title=doc.title,
+        service_name=doc.service_name,
+        severity=doc.severity,
+        detail="Manually escalated by operator",
+    )
+    if not email_sent:
+        logger.warning(f"Escalation email not sent for incident {incident_id} (SMTP not configured or failed)")
+
+    return {"status": "escalated", "incident_id": incident_id, "email_sent": email_sent}
 
 
 def _incident_to_dict(doc) -> dict:

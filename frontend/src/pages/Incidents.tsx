@@ -17,6 +17,8 @@ export default function Incidents() {
   if (filterStatus) list = list.filter(i => i.status === filterStatus);
   if (filterSeverity) list = list.filter(i => i.severity === filterSeverity);
 
+  const TERMINAL = ['resolved', 'failed', 'escalated', 'denied'];
+
   const handleEscalate = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     try {
@@ -32,10 +34,22 @@ export default function Incidents() {
     e.stopPropagation();
     try {
       await api.approvalDecision(id, 'approve');
-      addToast('Incident approved', 'success');
-      refresh();
+      addToast('Incident approved — analyzing logs...', 'success');
+      await refresh();
+      navigate(`/incidents/${id}`);
     } catch (err) {
       addToast(`Approval failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error');
+    }
+  };
+
+  const handleDeny = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    try {
+      await api.approvalDecision(id, 'deny');
+      addToast('Incident denied', 'success');
+      refresh();
+    } catch (err) {
+      addToast(`Deny failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error');
     }
   };
 
@@ -94,15 +108,30 @@ export default function Incidents() {
                 <td><StatusBadge status={i.status} /></td>
                 <td className="mono small">{formatTime(i.detected_at)}</td>
                 <td className="actions-cell" onClick={e => e.stopPropagation()}>
-                  {i.status === 'awaiting_approval' && (
-                    <button className="btn btn-sm btn-success" onClick={e => handleApprove(e, i.incident_id)}>
-                      Approve
-                    </button>
-                  )}
-                  {!['resolved', 'failed', 'escalated', 'denied'].includes(i.status) && (
-                    <button className="btn btn-sm btn-warning" onClick={e => handleEscalate(e, i.incident_id)}>
-                      Escalate
-                    </button>
+                  {!TERMINAL.includes(i.status) && (
+                    <>
+                      <button
+                        className="btn btn-sm btn-success"
+                        title="Approve this incident"
+                        onClick={e => handleApprove(e, i.incident_id)}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        title="Deny this incident"
+                        onClick={e => handleDeny(e, i.incident_id)}
+                      >
+                        Deny
+                      </button>
+                      <button
+                        className="btn btn-sm btn-warning"
+                        title="Escalate this incident"
+                        onClick={e => handleEscalate(e, i.incident_id)}
+                      >
+                        Escalate
+                      </button>
+                    </>
                   )}
                 </td>
               </tr>

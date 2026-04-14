@@ -57,6 +57,36 @@ async def approve(incident_id: str, body: DecisionBody):
         incident_id, "user",
         f"✅ **Approved** by {body.user}" + (f": {body.reason}" if body.reason else ""),
     )
+
+    # Trigger LLM to analyze logs and provide solution
+    llm = app_state.get("llm_client")
+    if llm and doc:
+        context = {
+            "incident_id": doc.incident_id,
+            "title": doc.title,
+            "diagnosis_summary": doc.diagnosis_summary,
+            "evidence": doc.evidence,
+            "status": doc.status,
+        }
+        system_state = {}
+        collector = app_state.get("collector")
+        if collector:
+            system_state = await collector.collect_once()
+
+        response = await llm.chat(
+            f"Incident APPROVED: {doc.title} (ID: {doc.incident_id}). "
+            f"Check the Loki logs for HTTP errors in the microservices. "
+            f"Evidence collected: {doc.evidence}. "
+            f"Diagnosis: {doc.diagnosis_summary}. "
+            f"Analyze the root cause and provide a clear step-by-step solution to fix this issue.",
+            system_state=system_state,
+            incident_context=context,
+        )
+        await incident_store.add_chat_message(
+            incident_id, "agent",
+            f"\U0001f50d **AutoOps Analysis & Solution:**\n\n{response}"
+        )
+
     return {"status": "approved", "incident_id": incident_id}
 
 
